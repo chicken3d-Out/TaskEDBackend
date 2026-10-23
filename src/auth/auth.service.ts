@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { Role } from '../common/enums/role.enum';
 import { UsersService } from '../users/users.service';
@@ -7,6 +7,8 @@ import { GoogleProfilePayload } from './google.strategy';
 
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
+
   constructor(
     private usersService: UsersService,
     private jwtService: JwtService,
@@ -34,8 +36,12 @@ export class AuthService {
       .split(',')
       .map((e) => e.trim().toLowerCase())
       .filter(Boolean);
+    this.logger.log(
+      `Sign-in ${user.depedEmail}; bootstrap admins configured: ${bootstrap.length}; match: ${bootstrap.includes(user.depedEmail.toLowerCase())}`,
+    );
     if (bootstrap.includes(user.depedEmail.toLowerCase()) && user.role !== Role.ADMINISTRATOR) {
       user = await this.usersService.promoteToAdministrator(user);
+      this.logger.log(`Promoted ${user.depedEmail} to Administrator`);
     }
     return user;
   }
