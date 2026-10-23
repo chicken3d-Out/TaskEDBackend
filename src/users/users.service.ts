@@ -50,6 +50,15 @@ export class UsersService {
     return this.usersRepo.save(user);
   }
 
+  async promoteToAdministrator(user: User): Promise<User> {
+    user.role = Role.ADMINISTRATOR;
+    user.status = AccountStatus.APPROVED;
+    user.designation = user.designation || 'System Administrator';
+    user.district = user.district || 'Division Office';
+    user.approvedAt = new Date();
+    return this.usersRepo.save(user);
+  }
+
   async completeRegistration(userId: string, dto: CompleteRegistrationDto): Promise<User> {
     const user = await this.findById(userId);
     if (!user) throw new NotFoundException('User not found');

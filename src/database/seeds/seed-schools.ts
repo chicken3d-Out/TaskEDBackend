@@ -1,12 +1,12 @@
+import { readFileSync } from 'fs';
+import { join } from 'path';
 import dataSource from '../data-source';
 import { School } from '../../schools/school.entity';
 
-// Placeholder seed data - replace with the real SDO Leyte school list.
-const SCHOOLS: { name: string; district: string }[] = [
-  { name: 'Santa Fe Central School', district: 'Santa Fe District' },
-  { name: 'Leyte National High School', district: 'Leyte District' },
-  { name: 'Palo Central Elementary School', district: 'Palo District' },
-];
+// Edit schools.json (same folder) with the real SDO Leyte school list.
+const SCHOOLS: { name: string; district: string }[] = JSON.parse(
+  readFileSync(join(__dirname, 'schools.json'), 'utf8'),
+);
 
 async function run() {
   await dataSource.initialize();

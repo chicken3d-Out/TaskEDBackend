@@ -18,6 +18,8 @@ export default new DataSource({
   username: process.env.DB_USERNAME || 'tasked',
   password: process.env.DB_PASSWORD || 'change_me',
   database: process.env.DB_DATABASE || 'tasked',
+  // Set DB_SSL=true when connecting to Render's External database URL.
+  ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: false } : false,
   entities: [
     User,
     School,

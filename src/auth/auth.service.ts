@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
+import { Role } from '../common/enums/role.enum';
 import { UsersService } from '../users/users.service';
 import { User } from '../users/user.entity';
 import { GoogleProfilePayload } from './google.strategy';
@@ -25,6 +26,16 @@ export class AuthService {
         profile.email,
         profile.name,
       );
+    }
+    // Bootstrap: emails listed in BOOTSTRAP_ADMIN_EMAILS (comma-separated)
+    // become approved Administrators on sign-in. Solves the "first admin"
+    // chicken-and-egg without needing direct database access.
+    const bootstrap = (process.env.BOOTSTRAP_ADMIN_EMAILS || '')
+      .split(',')
+      .map((e) => e.trim().toLowerCase())
+      .filter(Boolean);
+    if (bootstrap.includes(user.depedEmail.toLowerCase()) && user.role !== Role.ADMINISTRATOR) {
+      user = await this.usersService.promoteToAdministrator(user);
     }
     return user;
   }

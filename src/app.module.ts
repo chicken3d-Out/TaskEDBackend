@@ -37,6 +37,7 @@ import { ForumVote } from './forum/forum-vote.entity';
         username: config.get('DB_USERNAME', 'tasked'),
         password: config.get('DB_PASSWORD', 'change_me'),
         database: config.get('DB_DATABASE', 'tasked'),
+        ssl: config.get('DB_SSL') === 'true' ? { rejectUnauthorized: false } : false,
         entities: [
           User,
           School,
