@@ -38,7 +38,7 @@ npm run start:dev
 ```
 
 **Alternative**: `docker compose up -d --build` from the project root
-runs Postgres + MinIO + the backend together in one step - see the
+runs Postgres + the backend together in one step - see the
 top-level `DEPLOYMENT.md` for the full production path using this.
 
 In development, `synchronize: true` (see `app.module.ts`) auto-creates
@@ -53,32 +53,24 @@ add or change entities later, generate a new migration
 (`npm run migration:generate src/database/migrations/DescriptiveName`)
 rather than relying on `synchronize` in production.
 
-## 5. File storage (MinIO)
+## 5. File storage (Cloudinary)
 
-Ticket attachments and update images upload straight to MinIO (a free,
-self-hosted, S3-compatible object store) via presigned URLs - the file
-bytes never pass through this API.
+Ticket attachments, update images and profile pictures are stored on
+Cloudinary (free plan is enough to start). Uploads are *signed*: the
+frontend asks `POST /uploads/sign` (or `/uploads/sign-avatar`), the API
+signs the parameters with the secret, and the browser sends the file
+straight to Cloudinary - file bytes never pass through this API. Only
+JPG and PDF are accepted (enforced by the signed `allowed_formats`).
 
-Quickest way to get one running locally:
+Setup:
 
-```bash
-docker run -p 9000:9000 -p 9001:9001 \
-  -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin \
-  quay.io/minio/minio server /data --console-address ":9001"
-```
-
-The console is at http://localhost:9001 (login with the credentials
-above) if you want to browse uploaded files. `.env`'s `MINIO_*` values
-already match this local setup - `StorageService` creates the bucket
-and sets it to public-read automatically on startup if it doesn't
-exist yet, so there's nothing to configure in the console itself.
-
-For a real deployment, point `MINIO_ENDPOINT`/`MINIO_PORT` at wherever
-MinIO actually runs, and set `MINIO_PUBLIC_URL` if the backend reaches
-it at a different host than browsers do (e.g. an internal Docker
-hostname vs. a public subdomain fronted by a reverse proxy) - otherwise
-the `fileUrl`s handed back to the frontend will point somewhere
-browsers can't reach.
+1. Create a free account at https://cloudinary.com.
+2. On the Dashboard copy **Cloud name**, **API Key** and **API Secret**
+   into `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`,
+   `CLOUDINARY_API_SECRET`.
+3. In Cloudinary go to **Settings, Security** and turn on **Allow
+   delivery of PDF and ZIP files** (it is off by default on new
+   accounts, and PDFs will not open without it).
 
 ## 6. Seed schools
 
@@ -152,9 +144,9 @@ Every other account goes through the normal in-app approval flow.
 - **Realtime**: connect a Socket.IO client to the backend, emit
   `join` with the user's id right after connecting, then listen for
   `notification` events.
-- **File uploads**: `POST /uploads/presign` (`{ fileName }` ->
-  `{ uploadUrl, objectKey, fileUrl }`) - the frontend PUTs the raw file
-  to `uploadUrl` directly (MinIO), then passes the returned `fileUrl`
+- **File uploads**: `POST /uploads/sign` (`{ fileName, contentType }` ->
+  `{ uploadUrl, fields }`) - the frontend POSTs the file plus `fields`
+  to `uploadUrl` (Cloudinary), then passes the returned `secure_url`
   to the existing `POST /tickets/:id/attachments` or
   `POST /tickets/:id/updates` (`imageUrl`) endpoints, same as before.
 - **Profile editing**: `PATCH /users/me` also accepts `schoolId`
@@ -176,10 +168,10 @@ Every other account goes through the normal in-app approval flow.
 
 ## 9. Known gaps to fill in next
 
-- **File storage is public-read by design**: the MinIO bucket is set
-  to public-read so attachment/image URLs work directly in `<img>`/`<a>`
-  tags. Uploads still require a presigned PUT (so nobody can write
-  without going through the app), but anyone with a file's URL can view
+- **File storage is public-read by design**: Cloudinary files are
+  delivered as public URLs so they work directly in `<img>`/`<a>`
+  tags. Uploads still require a signature from this API (so nobody can
+  write without going through the app), but anyone with a file's URL can view
   it - fine for ticket attachments in a closed internal tool, but worth
   knowing if this ever needs to be more restrictive (switch to
   presigned GET URLs generated per-view instead).

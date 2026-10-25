@@ -12,6 +12,7 @@ import { ForumModule } from './forum/forum.module';
 import { WeatherModule } from './weather/weather.module';
 import { ChatbotModule } from './chatbot/chatbot.module';
 import { StorageModule } from './storage/storage.module';
+import { DashboardModule } from './dashboard/dashboard.module';
 import { User } from './users/user.entity';
 import { School } from './schools/school.entity';
 import { Ticket } from './tickets/ticket.entity';
@@ -65,6 +66,7 @@ import { ForumVote } from './forum/forum-vote.entity';
     WeatherModule,
     ChatbotModule,
     StorageModule,
+    DashboardModule,
   ],
 })
 export class AppModule {}

@@ -31,7 +31,6 @@
     "dotenv": "^16.4.5",
     "firebase-admin": "^13.0.2",
     "google-auth-library": "^9.14.1",
-    "minio": "^8.0.2",
     "passport": "^0.7.0",
     "passport-google-oauth20": "^2.0.0",
     "passport-jwt": "^4.0.1",

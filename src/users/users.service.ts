@@ -11,10 +11,22 @@ import { Role, AccountStatus } from '../common/enums/role.enum';
 import { SchoolsService } from '../schools/schools.service';
 
 export interface CompleteRegistrationDto {
-  role: Role;
+  firstName: string;
+  middleName?: string;
+  lastName: string;
+  contactNumber: string;
   designation: string;
+  schoolId: string;
   district: string;
-  schoolId?: string; // required for TEACHER
+  area: string;
+}
+
+export interface UpdateProfileDto extends Partial<CompleteRegistrationDto> {
+  avatarUrl?: string | null;
+}
+
+export interface AssignRoleDto {
+  role: Role;
   assignedSchoolIds?: string[]; // required for ADMIN_OFFICER (1+)
 }
 
@@ -53,142 +65,135 @@ export class UsersService {
   async promoteToAdministrator(user: User): Promise<User> {
     user.role = Role.ADMINISTRATOR;
     user.status = AccountStatus.APPROVED;
+    if (!user.firstName && user.name) {
+      const parts = user.name.trim().split(/\s+/);
+      user.firstName = parts[0] ?? null;
+      user.lastName = parts.length > 1 ? parts[parts.length - 1] : null;
+    }
     user.designation = user.designation || 'System Administrator';
     user.district = user.district || 'Division Office';
     user.approvedAt = new Date();
     return this.usersRepo.save(user);
   }
 
+  private composeName(first?: string | null, middle?: string | null, last?: string | null) {
+    return [first, middle, last].map((p) => (p ?? '').trim()).filter(Boolean).join(' ');
+  }
+
+  private clean(v?: string | null): string | null {
+    const t = (v ?? '').trim();
+    return t ? t : null;
+  }
+
+  // New users fill in their profile; they never choose a role. The account
+  // stays PENDING with role = null until an Administrator assigns a role.
   async completeRegistration(userId: string, dto: CompleteRegistrationDto): Promise<User> {
     const user = await this.findById(userId);
     if (!user) throw new NotFoundException('User not found');
     if (user.registrationComplete) {
       throw new BadRequestException('Registration already completed');
     }
-
-    user.role = dto.role;
-    user.designation = dto.designation;
-    user.district = dto.district;
-
-    if (dto.role === Role.TEACHER) {
-      if (!dto.schoolId) {
-        throw new BadRequestException('Teachers must select their school');
-      }
-      const school = await this.schoolsService.findById(dto.schoolId);
-      if (!school) throw new BadRequestException('Selected school does not exist');
-      user.school = school;
-      user.assignedSchools = [];
-    } else if (dto.role === Role.ADMIN_OFFICER) {
-      if (!dto.assignedSchoolIds || dto.assignedSchoolIds.length === 0) {
-        throw new BadRequestException(
-          'Administrative Officers must be assigned to at least one school',
-        );
-      }
-      const schools = await this.schoolsService.findByIds(dto.assignedSchoolIds);
-      if (schools.length !== dto.assignedSchoolIds.length) {
-        throw new BadRequestException('One or more selected schools do not exist');
-      }
-
-      // Business rule: exactly one AO per school (an AO can still cover
-      // several schools, but each school can only ever have one AO).
-      for (const school of schools) {
-        const existingAo = await this.findAoForSchool(school.id);
-        if (existingAo) {
-          throw new BadRequestException(
-            `${school.name} already has an Administrative Officer assigned (${existingAo.name})`,
-          );
-        }
-      }
-
-      user.assignedSchools = schools;
-      user.school = null;
-    } else {
-      // ADMIN_OFFICE_ACCOUNT / ADMINISTRATOR: no school binding required
-      user.school = null;
-      user.assignedSchools = [];
-    }
-
-    // Stays PENDING until the correct approver signs off (see approval chain).
-    user.status = AccountStatus.PENDING;
+    await this.applyProfile(user, dto);
+    user.status = user.status === AccountStatus.APPROVED ? user.status : AccountStatus.PENDING;
     return this.usersRepo.save(user);
   }
 
-  // Returns the pending accounts a given approver is allowed to act on.
-  async findPendingApprovalsFor(approver: User): Promise<User[]> {
-    if (approver.role === Role.ADMINISTRATOR) {
-      return this.usersRepo.find({
-        where: {
-          status: AccountStatus.PENDING,
-          role: In([Role.ADMINISTRATOR, Role.ADMIN_OFFICER, Role.ADMIN_OFFICE_ACCOUNT]),
-        },
-        order: { createdAt: 'ASC' },
-      });
+  private async applyProfile(user: User, dto: UpdateProfileDto) {
+    if (dto.firstName !== undefined) user.firstName = this.clean(dto.firstName);
+    if (dto.middleName !== undefined) user.middleName = this.clean(dto.middleName);
+    if (dto.lastName !== undefined) user.lastName = this.clean(dto.lastName);
+    if (dto.contactNumber !== undefined) user.contactNumber = this.clean(dto.contactNumber);
+    if (dto.designation !== undefined) user.designation = this.clean(dto.designation) as any;
+    if (dto.district !== undefined) user.district = this.clean(dto.district) as any;
+    if (dto.area !== undefined) user.area = this.clean(dto.area);
+    if (dto.avatarUrl !== undefined) user.avatarUrl = dto.avatarUrl || null;
+
+    if (dto.schoolId) {
+      const school = await this.schoolsService.findById(dto.schoolId);
+      if (!school) throw new BadRequestException('Selected school does not exist');
+      user.school = school;
     }
 
-    if (approver.role === Role.ADMIN_OFFICER) {
-      const schoolIds = (approver.assignedSchools || []).map((s) => s.id);
-      if (schoolIds.length === 0) return [];
-      return this.usersRepo
-        .createQueryBuilder('user')
-        .leftJoinAndSelect('user.school', 'school')
-        .where('user.status = :status', { status: AccountStatus.PENDING })
-        .andWhere('user.role = :role', { role: Role.TEACHER })
-        .andWhere('school.id IN (:...schoolIds)', { schoolIds })
-        .getMany();
-    }
-
-    throw new ForbiddenException('Your role cannot approve accounts');
+    const composed = this.composeName(user.firstName, user.middleName, user.lastName);
+    if (composed) user.name = composed;
   }
 
-  async approve(approver: User, targetUserId: string): Promise<User> {
+  // ---- Administrator tools: every account is reviewed and given a role here ----
+
+  private assertAdmin(user: User) {
+    if (user.role !== Role.ADMINISTRATOR) {
+      throw new ForbiddenException('Only Administrators can manage accounts');
+    }
+  }
+
+  // Accounts that finished their profile and still wait for a role.
+  async findPendingApprovalsFor(admin: User): Promise<User[]> {
+    this.assertAdmin(admin);
+    const pending = await this.usersRepo.find({
+      where: { status: AccountStatus.PENDING },
+      order: { createdAt: 'ASC' },
+    });
+    return pending.filter((u) => u.registrationComplete);
+  }
+
+  async findAllUsers(admin: User): Promise<User[]> {
+    this.assertAdmin(admin);
+    return this.usersRepo.find({ order: { createdAt: 'DESC' } });
+  }
+
+  // Sets (or changes) a user's role and approves them in one step.
+  async assignRole(admin: User, targetUserId: string, dto: AssignRoleDto): Promise<User> {
+    this.assertAdmin(admin);
+    if (!Object.values(Role).includes(dto.role)) {
+      throw new BadRequestException('Unknown role');
+    }
     const target = await this.findById(targetUserId);
     if (!target) throw new NotFoundException('User not found');
-    this.assertCanActOnApproval(approver, target);
 
+    if (dto.role === Role.TEACHER) {
+      if (!target.school) {
+        throw new BadRequestException('This user has no school on their profile yet');
+      }
+      target.assignedSchools = [];
+    } else if (dto.role === Role.ADMIN_OFFICER) {
+      const ids = dto.assignedSchoolIds ?? [];
+      if (ids.length === 0) {
+        throw new BadRequestException('Select at least one school for an Administrative Officer');
+      }
+      const schools = await this.schoolsService.findByIds(ids);
+      if (schools.length !== ids.length) {
+        throw new BadRequestException('One or more selected schools do not exist');
+      }
+      // Business rule: exactly one AO per school.
+      for (const school of schools) {
+        const existing = await this.findAoForSchool(school.id);
+        if (existing && existing.id !== target.id) {
+          throw new BadRequestException(
+            `${school.name} already has an Administrative Officer (${existing.name})`,
+          );
+        }
+      }
+      target.assignedSchools = schools;
+    } else {
+      target.assignedSchools = [];
+    }
+
+    target.role = dto.role;
     target.status = AccountStatus.APPROVED;
-    target.approvedBy = approver;
+    target.approvedBy = admin;
     target.approvedAt = new Date();
     return this.usersRepo.save(target);
   }
 
-  async reject(approver: User, targetUserId: string): Promise<User> {
+  async reject(admin: User, targetUserId: string): Promise<User> {
+    this.assertAdmin(admin);
     const target = await this.findById(targetUserId);
     if (!target) throw new NotFoundException('User not found');
-    this.assertCanActOnApproval(approver, target);
-
+    if (target.id === admin.id) throw new BadRequestException('You cannot reject yourself');
     target.status = AccountStatus.REJECTED;
-    target.approvedBy = approver;
+    target.approvedBy = admin;
     target.approvedAt = new Date();
     return this.usersRepo.save(target);
-  }
-
-  // Enforces the approval chain from the spec:
-  // - Administrator approves Administrator / AO / public-post accounts.
-  // - The AO assigned to a school approves Teacher accounts for that school.
-  private assertCanActOnApproval(approver: User, target: User) {
-    if (!target.registrationComplete) {
-      throw new BadRequestException('This account has not finished registration yet');
-    }
-    if (approver.role === Role.ADMINISTRATOR) {
-      const allowedRoles = [Role.ADMINISTRATOR, Role.ADMIN_OFFICER, Role.ADMIN_OFFICE_ACCOUNT];
-      if (!allowedRoles.includes(target.role as Role)) {
-        throw new ForbiddenException('Administrators cannot approve this account type');
-      }
-      return;
-    }
-    if (approver.role === Role.ADMIN_OFFICER) {
-      if (target.role !== Role.TEACHER) {
-        throw new ForbiddenException('Administrative Officers can only approve Teacher accounts');
-      }
-      const approverSchoolIds = new Set((approver.assignedSchools || []).map((s) => s.id));
-      if (!target.school || !approverSchoolIds.has(target.school.id)) {
-        throw new ForbiddenException(
-          'You can only approve teachers from your assigned school(s)',
-        );
-      }
-      return;
-    }
-    throw new ForbiddenException('Your role cannot approve accounts');
   }
 
   // All teachers at a school need this for the ticket-visibility transparency rule,
@@ -218,29 +223,10 @@ export class UsersService {
       .getOne();
   }
 
-  async updateProfile(
-    userId: string,
-    fields: Partial<Pick<User, 'name' | 'district' | 'designation'>> & { schoolId?: string },
-  ): Promise<User> {
+  async updateProfile(userId: string, fields: UpdateProfileDto): Promise<User> {
     const user = await this.findById(userId);
     if (!user) throw new NotFoundException('User not found');
-
-    if (fields.name !== undefined) user.name = fields.name;
-    if (fields.district !== undefined) user.district = fields.district;
-    if (fields.designation !== undefined) user.designation = fields.designation;
-
-    // "School Name" is a listed editable profile field, but only makes
-    // sense for Teachers (AOs manage assignedSchools via re-registration/
-    // an admin action, not this endpoint).
-    if (fields.schoolId !== undefined) {
-      if (user.role !== Role.TEACHER) {
-        throw new BadRequestException('Only teachers can change their school here');
-      }
-      const school = await this.schoolsService.findById(fields.schoolId);
-      if (!school) throw new BadRequestException('Selected school does not exist');
-      user.school = school;
-    }
-
+    await this.applyProfile(user, fields);
     return this.usersRepo.save(user);
   }
 

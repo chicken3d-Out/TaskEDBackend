@@ -23,8 +23,28 @@ export class User {
   @Column({ name: 'deped_email', unique: true })
   depedEmail: string;
 
+  // Display name, kept in sync from first/middle/last (see UsersService.composeName).
   @Column({ nullable: true })
   name: string;
+
+  @Column({ name: 'first_name', type: 'varchar', nullable: true })
+  firstName: string | null;
+
+  @Column({ name: 'middle_name', type: 'varchar', nullable: true })
+  middleName: string | null;
+
+  @Column({ name: 'last_name', type: 'varchar', nullable: true })
+  lastName: string | null;
+
+  @Column({ name: 'contact_number', type: 'varchar', nullable: true })
+  contactNumber: string | null;
+
+  @Column({ type: 'varchar', nullable: true })
+  area: string | null;
+
+  // Cloudinary URL of the (client-resized) profile picture.
+  @Column({ name: 'avatar_url', type: 'varchar', nullable: true })
+  avatarUrl: string | null;
 
   @Column({ nullable: true })
   district: string;
@@ -32,7 +52,7 @@ export class User {
   @Column({ nullable: true })
   designation: string;
 
-  // Chosen at registration; null until the user completes the registration form.
+  // Assigned by an Administrator; null until then.
   @Column({ type: 'enum', enum: Role, nullable: true })
   role: Role | null;
 
@@ -75,8 +95,22 @@ export class User {
   @UpdateDateColumn({ name: 'updated_at' })
   updatedAt: Date;
 
-  // True once the registration form (school/district/designation/role) is done.
+  // True once the registration form (name, contact, designation, school,
+  // district, area) is done. Role is NOT part of it: admins assign roles.
   get registrationComplete(): boolean {
-    return !!this.role && !!this.designation && !!this.district;
+    return (
+      !!this.firstName &&
+      !!this.lastName &&
+      !!this.contactNumber &&
+      !!this.designation &&
+      !!this.district &&
+      !!this.area &&
+      !!this.school
+    );
+  }
+
+  // Getters aren't serialized by default; the frontend routes on this flag.
+  toJSON() {
+    return { ...this, profileComplete: this.registrationComplete };
   }
 }

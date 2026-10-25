@@ -14,7 +14,7 @@ import { Roles } from '../common/decorators/roles.decorator';
 import { SkipApprovalCheck } from '../common/decorators/skip-approval-check.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { Role } from '../common/enums/role.enum';
-import { CompleteRegistrationDto, UsersService } from './users.service';
+import { AssignRoleDto, CompleteRegistrationDto, UpdateProfileDto, UsersService } from './users.service';
 import { User } from './user.entity';
 
 @UseGuards(JwtAuthGuard, ApprovedGuard)
@@ -36,11 +36,9 @@ export class UsersController {
     return this.usersService.completeRegistration(user.id, dto);
   }
 
+  @SkipApprovalCheck()
   @Patch('me')
-  updateProfile(
-    @CurrentUser() user: User,
-    @Body() body: { name?: string; district?: string; designation?: string; schoolId?: string },
-  ) {
+  updateProfile(@CurrentUser() user: User, @Body() body: UpdateProfileDto) {
     return this.usersService.updateProfile(user.id, body);
   }
 
@@ -52,23 +50,31 @@ export class UsersController {
   }
 
   @UseGuards(RolesGuard)
-  @Roles(Role.ADMINISTRATOR, Role.ADMIN_OFFICER)
+  @Roles(Role.ADMINISTRATOR)
   @Get('pending-approvals')
   pendingApprovals(@CurrentUser() user: User) {
     return this.usersService.findPendingApprovalsFor(user);
   }
 
   @UseGuards(RolesGuard)
-  @Roles(Role.ADMINISTRATOR, Role.ADMIN_OFFICER)
-  @Post(':id/approve')
-  approve(@CurrentUser() approver: User, @Param('id') id: string) {
-    return this.usersService.approve(approver, id);
+  @Roles(Role.ADMINISTRATOR)
+  @Get()
+  findAll(@CurrentUser() user: User) {
+    return this.usersService.findAllUsers(user);
+  }
+
+  // Assign (or change) a role; also approves the account.
+  @UseGuards(RolesGuard)
+  @Roles(Role.ADMINISTRATOR)
+  @Post(':id/assign-role')
+  assignRole(@CurrentUser() admin: User, @Param('id') id: string, @Body() dto: AssignRoleDto) {
+    return this.usersService.assignRole(admin, id, dto);
   }
 
   @UseGuards(RolesGuard)
-  @Roles(Role.ADMINISTRATOR, Role.ADMIN_OFFICER)
+  @Roles(Role.ADMINISTRATOR)
   @Post(':id/reject')
-  reject(@CurrentUser() approver: User, @Param('id') id: string) {
-    return this.usersService.reject(approver, id);
+  reject(@CurrentUser() admin: User, @Param('id') id: string) {
+    return this.usersService.reject(admin, id);
   }
 }

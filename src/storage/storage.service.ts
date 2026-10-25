@@ -1,113 +1,65 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { Client as MinioClient } from 'minio';
-import { randomUUID } from 'crypto';
+import { createHash } from 'crypto';
 
-export interface PresignedUpload {
-  uploadUrl: string; // presigned PUT URL - the browser uploads directly to this
-  objectKey: string;
-  fileUrl: string; // stable public URL to store on the ticket/update once the upload completes
-}
-
-// Only these are accepted anywhere in the app (ticket attachments,
-// update images) - keyed by the exact Content-Type the frontend must
-// send, which is also baked into the presigned URL's signature so a
-// mismatched upload is rejected by MinIO itself, not just by our API.
+// Only these are accepted for ticket attachments / update images, keyed by
+// the MIME type the browser reports. Cloudinary enforces the same list on
+// its side through the signed `allowed_formats` parameter.
 export const ALLOWED_UPLOAD_TYPES: Record<string, string[]> = {
   'image/jpeg': ['.jpg', '.jpeg'],
   'application/pdf': ['.pdf'],
 };
 
-const PRESIGN_EXPIRY_SECONDS = 5 * 60; // 5 minutes to complete the upload
+export type UploadPurpose = 'attachment' | 'avatar';
 
+export interface SignedUpload {
+  uploadUrl: string; // POST multipart/form-data here, straight from the browser
+  fields: Record<string, string>; // include every one of these in the form
+}
+
+// Cloudinary signed uploads: the API secret never leaves the server. We
+// sign the upload parameters; the browser then sends the file directly to
+// Cloudinary (it never passes through this backend) along with the
+// signature. The response contains `secure_url`, which the frontend saves
+// on the ticket / profile.
 @Injectable()
-export class StorageService implements OnModuleInit {
-  private readonly logger = new Logger(StorageService.name);
-  private client: MinioClient;
-  private bucket: string;
-  private publicUrlBase: string;
+export class StorageService {
+  constructor(private config: ConfigService) {}
 
-  constructor(private config: ConfigService) {
-    const endPoint = this.config.get<string>('MINIO_ENDPOINT', 'localhost');
-    const port = parseInt(this.config.get<string>('MINIO_PORT', '9000'), 10);
-    const useSSL = this.config.get<string>('MINIO_USE_SSL', 'false') === 'true';
-
-    this.client = new MinioClient({
-      endPoint,
-      port,
-      useSSL,
-      accessKey: this.config.get<string>('MINIO_ACCESS_KEY', 'minioadmin'),
-      secretKey: this.config.get<string>('MINIO_SECRET_KEY', 'minioadmin'),
-    });
-
-    this.bucket = this.config.get<string>('MINIO_BUCKET', 'tasked-attachments');
-
-    // The endpoint MinIO is reached at from inside the backend (e.g. a
-    // Docker service name) is often not the same host browsers can reach
-    // it at - override with MINIO_PUBLIC_URL (e.g. a reverse-proxied
-    // subdomain) whenever they differ.
-    this.publicUrlBase = this.config.get<string>(
-      'MINIO_PUBLIC_URL',
-      `${useSSL ? 'https' : 'http'}://${endPoint}:${port}`,
-    );
-  }
-
-  async onModuleInit() {
-    try {
-      const exists = await this.client.bucketExists(this.bucket);
-      if (!exists) {
-        await this.client.makeBucket(this.bucket);
-        this.logger.log(`Created MinIO bucket "${this.bucket}"`);
-      }
-      // Public-read so attachment/update-image URLs work directly in
-      // <img>/<a> tags without generating a presigned GET on every view.
-      // Uploads still require a presigned PUT (below), so nobody can
-      // write to the bucket without going through the app first.
-      await this.client.setBucketPolicy(this.bucket, JSON.stringify(this.publicReadPolicy()));
-    } catch (err) {
-      this.logger.warn(
-        `Could not verify/configure MinIO bucket "${this.bucket}" on startup - is MinIO running and reachable? (${err})`,
+  private creds() {
+    const cloudName = this.config.get<string>('CLOUDINARY_CLOUD_NAME');
+    const apiKey = this.config.get<string>('CLOUDINARY_API_KEY');
+    const apiSecret = this.config.get<string>('CLOUDINARY_API_SECRET');
+    if (!cloudName || !apiKey || !apiSecret) {
+      throw new BadRequestException(
+        'File uploads are not configured yet (missing Cloudinary settings on the server).',
       );
     }
+    return { cloudName, apiKey, apiSecret };
   }
 
-  private publicReadPolicy() {
-    return {
-      Version: '2012-10-17',
-      Statement: [
-        {
-          Effect: 'Allow',
-          Principal: { AWS: ['*'] },
-          Action: ['s3:GetObject'],
-          Resource: [`arn:aws:s3:::${this.bucket}/*`],
-        },
-      ],
+  signUpload(userId: string, purpose: UploadPurpose): SignedUpload {
+    const { cloudName, apiKey, apiSecret } = this.creds();
+    const timestamp = Math.floor(Date.now() / 1000).toString();
+    const folder = purpose === 'avatar' ? 'tasked/avatars' : `tasked/attachments/${userId}`;
+    const allowedFormats = purpose === 'avatar' ? 'jpg' : 'jpg,pdf';
+
+    // Everything that is sent (except file, api_key and resource_type) must
+    // be signed, sorted by name.
+    const toSign: Record<string, string> = {
+      allowed_formats: allowedFormats,
+      folder,
+      timestamp,
     };
-  }
+    const base = Object.keys(toSign)
+      .sort()
+      .map((k) => `${k}=${toSign[k]}`)
+      .join('&');
+    const signature = createHash('sha1').update(base + apiSecret).digest('hex');
 
-  // Namespaced by user so objects are easy to trace/clean up, and a
-  // random suffix so two people uploading "photo.jpg" never collide.
-  // contentType is baked into the presigned URL's signature (via
-  // reqParams) so the actual PUT must send that exact Content-Type
-  // header or MinIO rejects it - the allow-list is enforced at the
-  // storage layer, not just by our own validation.
-  async createPresignedUpload(
-    userId: string,
-    fileName: string,
-    contentType: string,
-  ): Promise<PresignedUpload> {
-    const safeName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_');
-    const objectKey = `${userId}/${randomUUID()}-${safeName}`;
-
-    const uploadUrl = await this.client.presignedUrl(
-      'PUT',
-      this.bucket,
-      objectKey,
-      PRESIGN_EXPIRY_SECONDS,
-      { 'Content-Type': contentType },
-    );
-
-    const fileUrl = `${this.publicUrlBase}/${this.bucket}/${objectKey}`;
-    return { uploadUrl, objectKey, fileUrl };
+    return {
+      uploadUrl: `https://api.cloudinary.com/v1_1/${cloudName}/auto/upload`,
+      fields: { ...toSign, api_key: apiKey, signature },
+    };
   }
 }
