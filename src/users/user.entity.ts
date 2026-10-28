@@ -17,11 +17,21 @@ export class User {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @Column({ name: 'google_id', unique: true })
-  googleId: string;
+  // Null until a DepEd-email user first signs in with Google (an Administrator
+  // can pre-create their account), and always null for administrator accounts.
+  @Column({ name: 'google_id', type: 'varchar', unique: true, nullable: true })
+  googleId: string | null;
 
-  @Column({ name: 'deped_email', unique: true })
-  depedEmail: string;
+  @Column({ name: 'deped_email', type: 'varchar', unique: true, nullable: true })
+  depedEmail: string | null;
+
+  // Administrator accounts sign in with username + password instead of Google.
+  @Column({ type: 'varchar', unique: true, nullable: true })
+  username: string | null;
+
+  // bcrypt hash; never selected unless asked for explicitly.
+  @Column({ name: 'password_hash', type: 'varchar', nullable: true, select: false })
+  passwordHash?: string | null;
 
   // Display name, kept in sync from first/middle/last (see UsersService.composeName).
   @Column({ nullable: true })
@@ -111,6 +121,7 @@ export class User {
 
   // Getters aren't serialized by default; the frontend routes on this flag.
   toJSON() {
-    return { ...this, profileComplete: this.registrationComplete };
+    const { passwordHash: _omit, ...rest } = this as any;
+    return { ...rest, profileComplete: this.registrationComplete };
   }
 }

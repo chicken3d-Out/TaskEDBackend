@@ -1,11 +1,15 @@
 import {
   BadRequestException,
+  ConflictException,
+  Logger,
+  OnApplicationBootstrap,
   ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
+import * as bcrypt from 'bcryptjs';
 import { User } from './user.entity';
 import { Role, AccountStatus } from '../common/enums/role.enum';
 import { SchoolsService } from '../schools/schools.service';
@@ -25,13 +29,40 @@ export interface UpdateProfileDto extends Partial<CompleteRegistrationDto> {
   avatarUrl?: string | null;
 }
 
+export interface CreateUserDto {
+  kind: 'staff' | 'admin';
+  firstName: string;
+  middleName?: string;
+  lastName: string;
+  contactNumber?: string;
+  designation?: string;
+  district?: string;
+  area?: string;
+  schoolId?: string;
+  // staff
+  depedEmail?: string;
+  role?: Role;
+  assignedSchoolIds?: string[];
+  // admin
+  username?: string;
+  password?: string;
+}
+
+export interface AdminUpdateUserDto extends UpdateProfileDto {
+  depedEmail?: string;
+}
+
+export const MIN_PASSWORD_LENGTH = 10;
+
 export interface AssignRoleDto {
   role: Role;
   assignedSchoolIds?: string[]; // required for ADMIN_OFFICER (1+)
 }
 
 @Injectable()
-export class UsersService {
+export class UsersService implements OnApplicationBootstrap {
+  private readonly logger = new Logger(UsersService.name);
+
   constructor(
     @InjectRepository(User) private usersRepo: Repository<User>,
     private schoolsService: SchoolsService,
@@ -41,8 +72,112 @@ export class UsersService {
     return this.usersRepo.findOne({ where: { googleId } });
   }
 
-  findByEmail(depedEmail: string): Promise<User | null> {
-    return this.usersRepo.findOne({ where: { depedEmail } });
+  // Case-insensitive: Google may report a different capitalisation than an
+  // Administrator typed when pre-creating the account.
+  async findByEmail(depedEmail: string): Promise<User | null> {
+    const row = await this.usersRepo
+      .createQueryBuilder('u')
+      .select('u.id')
+      .where('lower(u.deped_email) = lower(:email)', { email: depedEmail })
+      .getOne();
+    return row ? this.findById(row.id) : null;
+  }
+
+  async linkGoogleId(user: User, googleId: string): Promise<User> {
+    if (!user.googleId) {
+      user.googleId = googleId;
+      return this.usersRepo.save(user);
+    }
+    return user;
+  }
+
+  // ---- Administrator (username + password) accounts ----
+
+  async verifyAdminLogin(username: string, password: string): Promise<User | null> {
+    const row = await this.usersRepo
+      .createQueryBuilder('u')
+      .addSelect('u.passwordHash')
+      .where('lower(u.username) = lower(:username)', { username: (username ?? '').trim() })
+      .getOne();
+    // Always run a bcrypt compare so response time does not reveal whether
+    // the username exists.
+    const hash = row?.passwordHash ?? '$2a$10$invalidinvalidinvalidinvalidinvalidinvalidinvalidinvali';
+    const ok = await bcrypt.compare(password ?? '', hash);
+    if (!row || !row.passwordHash || !ok) return null;
+    if (row.role !== Role.ADMINISTRATOR || row.status !== AccountStatus.APPROVED) return null;
+    return this.findById(row.id);
+  }
+
+  private assertPasswordStrong(password: string | undefined) {
+    if (!password || password.length < MIN_PASSWORD_LENGTH) {
+      throw new BadRequestException(`Password must be at least ${MIN_PASSWORD_LENGTH} characters`);
+    }
+  }
+
+  async changeOwnPassword(user: User, currentPassword: string, newPassword: string) {
+    if (!user.username) throw new ForbiddenException('This account does not use a password');
+    this.assertPasswordStrong(newPassword);
+    const row = await this.usersRepo
+      .createQueryBuilder('u')
+      .addSelect('u.passwordHash')
+      .where('u.id = :id', { id: user.id })
+      .getOne();
+    if (!row?.passwordHash || !(await bcrypt.compare(currentPassword ?? '', row.passwordHash))) {
+      throw new BadRequestException('Current password is incorrect');
+    }
+    await this.usersRepo.update(user.id, { passwordHash: await bcrypt.hash(newPassword, 10) });
+    return { ok: true };
+  }
+
+  async resetAdminPassword(admin: User, targetId: string, newPassword: string) {
+    this.assertAdmin(admin);
+    const target = await this.findById(targetId);
+    if (!target) throw new NotFoundException('User not found');
+    if (!target.username) throw new BadRequestException('Only password accounts can be reset');
+    this.assertPasswordStrong(newPassword);
+    await this.usersRepo.update(target.id, { passwordHash: await bcrypt.hash(newPassword, 10) });
+    return { ok: true };
+  }
+
+  // First administrator: set ADMIN_USERNAME + ADMIN_PASSWORD on the host and
+  // the account is created at startup if it does not exist. To recover a
+  // lost password, also set ADMIN_RESET_PASSWORD=true for one start.
+  async onApplicationBootstrap() {
+    const username = (process.env.ADMIN_USERNAME ?? '').trim();
+    const password = process.env.ADMIN_PASSWORD ?? '';
+    if (!username || !password) return;
+    if (password.length < MIN_PASSWORD_LENGTH) {
+      this.logger.warn(`ADMIN_PASSWORD is shorter than ${MIN_PASSWORD_LENGTH} characters; admin not created`);
+      return;
+    }
+    const existing = await this.usersRepo
+      .createQueryBuilder('u')
+      .where('lower(u.username) = lower(:username)', { username })
+      .getOne();
+    if (existing) {
+      if (process.env.ADMIN_RESET_PASSWORD === 'true') {
+        await this.usersRepo.update(existing.id, {
+          passwordHash: await bcrypt.hash(password, 10),
+          role: Role.ADMINISTRATOR,
+          status: AccountStatus.APPROVED,
+        });
+        this.logger.log(`Password reset for administrator "${username}"`);
+      }
+      return;
+    }
+    const admin = this.usersRepo.create({
+      username,
+      passwordHash: await bcrypt.hash(password, 10),
+      firstName: 'System',
+      lastName: 'Administrator',
+      name: 'System Administrator',
+      designation: 'System Administrator',
+      role: Role.ADMINISTRATOR,
+      status: AccountStatus.APPROVED,
+      approvedAt: new Date(),
+    });
+    await this.usersRepo.save(admin);
+    this.logger.log(`Created administrator account "${username}"`);
   }
 
   findById(id: string): Promise<User | null> {
@@ -59,20 +194,6 @@ export class UsersService {
       status: AccountStatus.PENDING,
       role: null,
     });
-    return this.usersRepo.save(user);
-  }
-
-  async promoteToAdministrator(user: User): Promise<User> {
-    user.role = Role.ADMINISTRATOR;
-    user.status = AccountStatus.APPROVED;
-    if (!user.firstName && user.name) {
-      const parts = user.name.trim().split(/\s+/);
-      user.firstName = parts[0] ?? null;
-      user.lastName = parts.length > 1 ? parts[parts.length - 1] : null;
-    }
-    user.designation = user.designation || 'System Administrator';
-    user.district = user.district || 'Division Office';
-    user.approvedAt = new Date();
     return this.usersRepo.save(user);
   }
 
@@ -150,6 +271,18 @@ export class UsersService {
     const target = await this.findById(targetUserId);
     if (!target) throw new NotFoundException('User not found');
 
+    if (dto.role === Role.ADMINISTRATOR && !target.username) {
+      throw new BadRequestException(
+        'Administrator accounts use a username and password. Create one with "Add user".',
+      );
+    }
+    if (target.username && dto.role !== Role.ADMINISTRATOR) {
+      throw new BadRequestException('A username/password account must stay an Administrator');
+    }
+    if (target.id === admin.id && dto.role !== Role.ADMINISTRATOR) {
+      throw new BadRequestException('You cannot change your own role');
+    }
+
     if (dto.role === Role.TEACHER) {
       if (!target.school) {
         throw new BadRequestException('This user has no school on their profile yet');
@@ -193,6 +326,115 @@ export class UsersService {
     target.status = AccountStatus.REJECTED;
     target.approvedBy = admin;
     target.approvedAt = new Date();
+    return this.usersRepo.save(target);
+  }
+
+  // ---- Administrator tools: add, edit, suspend ----
+
+  private normalizeEmail(email: string | undefined) {
+    const e = (email ?? '').trim().toLowerCase();
+    const domain = (process.env.ALLOWED_EMAIL_DOMAIN || 'deped.gov.ph').toLowerCase();
+    if (!e || !e.endsWith(`@${domain}`)) {
+      throw new BadRequestException(`A @${domain} email address is required`);
+    }
+    return e;
+  }
+
+  async createUser(admin: User, dto: CreateUserDto): Promise<User> {
+    this.assertAdmin(admin);
+    if (!dto.firstName?.trim() || !dto.lastName?.trim()) {
+      throw new BadRequestException('First and last name are required');
+    }
+
+    const user = this.usersRepo.create({
+      status: AccountStatus.APPROVED,
+      approvedBy: admin,
+      approvedAt: new Date(),
+      assignedSchools: [],
+    });
+
+    if (dto.kind === 'admin') {
+      const username = (dto.username ?? '').trim();
+      if (!/^[a-zA-Z0-9._-]{3,40}$/.test(username)) {
+        throw new BadRequestException('Username must be 3-40 letters, numbers, dot, dash or underscore');
+      }
+      this.assertPasswordStrong(dto.password);
+      const taken = await this.usersRepo
+        .createQueryBuilder('u')
+        .where('lower(u.username) = lower(:username)', { username })
+        .getOne();
+      if (taken) throw new ConflictException('That username is already taken');
+      user.username = username;
+      user.passwordHash = await bcrypt.hash(dto.password!, 10);
+      user.role = Role.ADMINISTRATOR;
+      user.depedEmail = dto.depedEmail ? this.normalizeEmail(dto.depedEmail) : null;
+    } else {
+      const email = this.normalizeEmail(dto.depedEmail);
+      if (await this.findByEmail(email)) {
+        throw new ConflictException('An account with that email already exists');
+      }
+      if (!dto.role || dto.role === Role.ADMINISTRATOR || !Object.values(Role).includes(dto.role)) {
+        throw new BadRequestException('Choose Teacher, Administrative Officer or Administrative Office');
+      }
+      user.depedEmail = email;
+      user.role = dto.role;
+    }
+
+    await this.applyProfile(user, dto);
+
+    if (user.role === Role.TEACHER && !user.school) {
+      throw new BadRequestException('Teachers need a school');
+    }
+    if (user.role === Role.ADMIN_OFFICER) {
+      const ids = dto.assignedSchoolIds ?? [];
+      if (ids.length === 0) {
+        throw new BadRequestException('Select at least one school for an Administrative Officer');
+      }
+      const schools = await this.schoolsService.findByIds(ids);
+      if (schools.length !== ids.length) {
+        throw new BadRequestException('One or more selected schools do not exist');
+      }
+      for (const school of schools) {
+        const existing = await this.findAoForSchool(school.id);
+        if (existing) {
+          throw new BadRequestException(
+            `${school.name} already has an Administrative Officer (${existing.name})`,
+          );
+        }
+      }
+      user.assignedSchools = schools;
+    }
+    return this.usersRepo.save(user);
+  }
+
+  async adminUpdateUser(admin: User, targetId: string, dto: AdminUpdateUserDto): Promise<User> {
+    this.assertAdmin(admin);
+    const target = await this.findById(targetId);
+    if (!target) throw new NotFoundException('User not found');
+    if (dto.depedEmail !== undefined && !target.username) {
+      const email = this.normalizeEmail(dto.depedEmail);
+      const other = await this.findByEmail(email);
+      if (other && other.id !== target.id) {
+        throw new ConflictException('Another account already uses that email');
+      }
+      target.depedEmail = email;
+    }
+    await this.applyProfile(target, dto);
+    return this.usersRepo.save(target);
+  }
+
+  async setStatus(admin: User, targetId: string, status: AccountStatus): Promise<User> {
+    this.assertAdmin(admin);
+    if (status !== AccountStatus.APPROVED && status !== AccountStatus.SUSPENDED) {
+      throw new BadRequestException('Status must be approved or suspended');
+    }
+    const target = await this.findById(targetId);
+    if (!target) throw new NotFoundException('User not found');
+    if (target.id === admin.id) throw new BadRequestException('You cannot change your own status');
+    if (status === AccountStatus.APPROVED && !target.role) {
+      throw new BadRequestException('Assign a role first');
+    }
+    target.status = status;
     return this.usersRepo.save(target);
   }
 

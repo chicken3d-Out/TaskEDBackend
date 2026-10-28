@@ -1,16 +1,91 @@
-import { Controller, Get, Req, Res, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  Post,
+  Req,
+  Res,
+  UseGuards,
+  HttpException,
+  HttpStatus,
+} from '@nestjs/common';
 import { GoogleAuthGuard } from './google-auth.guard';
 import { ConfigService } from '@nestjs/config';
 import { Response } from 'express';
-import { AuthService } from './auth.service';
+import { AdministratorUsesPasswordError, AuthService } from './auth.service';
+import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { CurrentUser } from '../common/decorators/current-user.decorator';
+import { User } from '../users/user.entity';
+import { UsersService } from '../users/users.service';
 import { GoogleProfilePayload } from './google.strategy';
 
 @Controller('auth')
 export class AuthController {
+  // Failed administrator sign-ins per client+username, to slow down guessing.
+  private failures = new Map<string, { count: number; first: number }>();
+  private static readonly MAX_FAILURES = 5;
+  private static readonly WINDOW_MS = 15 * 60 * 1000;
+
   constructor(
     private authService: AuthService,
+    private usersService: UsersService,
     private config: ConfigService,
   ) {}
+
+  private throttleKey(req: any, username: string) {
+    return `${req.ip}|${(username ?? '').toLowerCase()}`;
+  }
+
+  private assertNotThrottled(key: string) {
+    const f = this.failures.get(key);
+    if (!f) return;
+    if (Date.now() - f.first > AuthController.WINDOW_MS) {
+      this.failures.delete(key);
+      return;
+    }
+    if (f.count >= AuthController.MAX_FAILURES) {
+      throw new HttpException(
+        'Too many failed attempts. Try again in 15 minutes.',
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+  }
+
+  private recordFailure(key: string) {
+    const f = this.failures.get(key);
+    if (!f || Date.now() - f.first > AuthController.WINDOW_MS) {
+      this.failures.set(key, { count: 1, first: Date.now() });
+    } else {
+      f.count++;
+    }
+  }
+
+  // Administrator sign-in: username + password (no Google).
+  @Post('admin-login')
+  @HttpCode(200)
+  async adminLogin(@Req() req: any, @Body() body: { username: string; password: string }) {
+    const key = this.throttleKey(req, body?.username);
+    this.assertNotThrottled(key);
+    try {
+      const user = await this.authService.handleAdminLogin(body?.username, body?.password);
+      this.failures.delete(key);
+      return { token: this.authService.issueToken(user) };
+    } catch (e) {
+      this.recordFailure(key);
+      throw e;
+    }
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('change-password')
+  @HttpCode(200)
+  changePassword(
+    @CurrentUser() user: User,
+    @Body() body: { currentPassword: string; newPassword: string },
+  ) {
+    return this.usersService.changeOwnPassword(user, body.currentPassword, body.newPassword);
+  }
 
   // Kicks off the OAuth dance - the frontend just links/redirects here.
   @Get('google')
@@ -23,7 +98,22 @@ export class AuthController {
   @UseGuards(GoogleAuthGuard)
   async googleCallback(@Req() req: any, @Res() res: Response) {
     const profile = req.user as GoogleProfilePayload;
-    const user = await this.authService.handleGoogleLogin(profile);
+    const isMobile = req.query?.state === 'mobile';
+    let user;
+    try {
+      user = await this.authService.handleGoogleLogin(profile);
+    } catch (e) {
+      if (e instanceof AdministratorUsesPasswordError) {
+        const code = 'admin_use_password';
+        if (isMobile) {
+          const scheme = this.config.get<string>('MOBILE_APP_SCHEME', 'ph.gov.deped.leyte.tasked');
+          return res.redirect(`${scheme}://auth?error=${code}`);
+        }
+        const frontend = this.config.get<string>('FRONTEND_URL', 'http://localhost:4200');
+        return res.redirect(`${frontend}/login?error=${code}`);
+      }
+      throw e;
+    }
     const token = this.authService.issueToken(user);
 
     // Mobile (Capacitor) logins run in the system browser, so hand the token

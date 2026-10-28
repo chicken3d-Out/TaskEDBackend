@@ -14,7 +14,15 @@ import { Roles } from '../common/decorators/roles.decorator';
 import { SkipApprovalCheck } from '../common/decorators/skip-approval-check.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { Role } from '../common/enums/role.enum';
-import { AssignRoleDto, CompleteRegistrationDto, UpdateProfileDto, UsersService } from './users.service';
+import {
+  AdminUpdateUserDto,
+  AssignRoleDto,
+  CompleteRegistrationDto,
+  CreateUserDto,
+  UpdateProfileDto,
+  UsersService,
+} from './users.service';
+import { AccountStatus } from '../common/enums/role.enum';
 import { User } from './user.entity';
 
 @UseGuards(JwtAuthGuard, ApprovedGuard)
@@ -61,6 +69,42 @@ export class UsersController {
   @Get()
   findAll(@CurrentUser() user: User) {
     return this.usersService.findAllUsers(user);
+  }
+
+  @UseGuards(RolesGuard)
+  @Roles(Role.ADMINISTRATOR)
+  @Post()
+  create(@CurrentUser() admin: User, @Body() dto: CreateUserDto) {
+    return this.usersService.createUser(admin, dto);
+  }
+
+  @UseGuards(RolesGuard)
+  @Roles(Role.ADMINISTRATOR)
+  @Patch(':id')
+  adminUpdate(@CurrentUser() admin: User, @Param('id') id: string, @Body() dto: AdminUpdateUserDto) {
+    return this.usersService.adminUpdateUser(admin, id, dto);
+  }
+
+  @UseGuards(RolesGuard)
+  @Roles(Role.ADMINISTRATOR)
+  @Post(':id/status')
+  setStatus(
+    @CurrentUser() admin: User,
+    @Param('id') id: string,
+    @Body() body: { status: AccountStatus },
+  ) {
+    return this.usersService.setStatus(admin, id, body.status);
+  }
+
+  @UseGuards(RolesGuard)
+  @Roles(Role.ADMINISTRATOR)
+  @Post(':id/reset-password')
+  resetPassword(
+    @CurrentUser() admin: User,
+    @Param('id') id: string,
+    @Body() body: { password: string },
+  ) {
+    return this.usersService.resetAdminPassword(admin, id, body.password);
   }
 
   // Assign (or change) a role; also approves the account.

@@ -87,17 +87,19 @@ schools/districts, but a seed script unblocks development now.)
 
 ## 7. Bootstrap the first Administrator
 
-The approval chain requires an Administrator to approve AO accounts -
-but nobody exists yet to approve the very first Administrator. Have
-that person sign in once via Google (so their user row is created),
-then run:
+Administrators sign in with a **username and password**, not Google.
+Set these env vars and the first Administrator is created at startup
+if it does not exist yet:
 
-```bash
-npm run promote:admin -- someone@deped.gov.ph
+```
+ADMIN_USERNAME=your-username
+ADMIN_PASSWORD=at-least-10-characters
+ADMIN_RESET_PASSWORD=false   # set true for ONE start to reset the password
 ```
 
-This directly marks them APPROVED + ADMINISTRATOR in the database.
-Every other account goes through the normal in-app approval flow.
+Or create one by hand: `npm run create-admin -- <username> <password>`.
+Everyone else signs in with their DepEd Google account; an Administrator
+assigns roles in the app (Users page), or pre-registers staff by DepEd email.
 
 ## 8. How the pieces fit together
 
