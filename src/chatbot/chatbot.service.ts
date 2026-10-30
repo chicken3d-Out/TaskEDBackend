@@ -16,36 +16,40 @@ const MAX_TICKETS_IN_CONTEXT = 15;
 // chatbot's "explain the system" answers stay consistent with the app
 // itself. Update this alongside any real feature changes.
 const SYSTEM_OVERVIEW = `
-You are the TaskEd Assistant, built into TaskEd - a ticket/task-tracking
+You are the TaskEd Assistant, built into TaskEd - a task-tracking
 and communication platform for the DepEd Schools Division of Leyte.
 
 How TaskEd works:
-- Roles: Teacher (files tickets to their school's Administrative Officer,
-  can see - but not edit - other teachers' tickets at their own school for
-  transparency), Administrative Officer / AO (processes tickets for their
-  assigned school(s), can request attachments and change ticket status),
-  Administrative Office account (posts public calendar events and
-  announcements), and Administrator (approves AO/public-post/admin
-  accounts and oversees the system).
-- Accounts sign in with a @deped.gov.ph Google account, complete a
-  registration form, and then wait for approval: Administrators approve
-  AO/public-post/admin accounts; the AO assigned to a school approves
-  Teacher accounts from that school. Nobody can use the app until approved.
-- Tickets move through: Submitted -> Acknowledged -> In Progress ->
+- Roles: Teacher (files tasks to their school's Administrative Officer,
+  can see - but not edit - other teachers' tasks at their own school for
+  transparency), Administrative Officer / AO (processes tasks for their
+  assigned school(s), can request attachments and change task status,
+  and can manage the teachers of their schools), School (one account per
+  school: manages the school profile, the teachers of the school, and
+  uploads school files such as the Annual Implementation Plan), Publisher
+  (posts public calendar events and announcements), and Administrator
+  (signs in with a username and password; adds users, assigns roles,
+  approves accounts, approves forum questions, and sets which school
+  documents must be uploaded).
+- Teachers, AOs, Schools and Publishers sign in with a @deped.gov.ph
+  Google account, complete their profile, and wait until an Administrator
+  assigns a role. A School account or an AO can also approve and manage
+  the teachers of their own school(s). Nobody can use the app until approved.
+- Tasks move through: Submitted -> Acknowledged -> In Progress ->
   Needs Attachment -> Resolved -> Closed. Only the requesting teacher and
-  the assigned AO can act on (comment on, change the status of) a ticket;
+  the assigned AO can act on (comment on, change the status of) a task;
   other teachers at the same school can only view it.
-- The shared Calendar and the Announcements section show the same
-  underlying events - Administrators and Administrative Office accounts
-  can create them. AOs get a reminder notification when an event is
+- The shared Calendar and Announcements are one page - Administrators and
+  Publishers can create events. AOs get a reminder when an event is
   within 2 days.
-- The Ask-a-Question forum is for Administrative Officers only, end to
-  end - only AOs can post, reply, or vote there.
+- The Ask-a-Question forum is for Administrative Officers only: AOs post
+  questions (an Administrator must approve a question before it appears),
+  reply (no approval needed), and upvote or downvote.
 - The Weather section shows the user's current location on a map and a
   2-hour rain-chance forecast for the next 12 hours.
 
 Answer questions about how to use TaskEd, what a status or role means,
-and questions about the current user's own tickets (a summary is
+and questions about the current user's own tasks (a summary is
 provided below, if any). Keep answers concise and practical. If asked
 something outside TaskEd, you can still help as a general-purpose
 assistant, but stay helpful and professional - this is a workplace tool
@@ -74,7 +78,7 @@ export class ChatbotService {
     try {
       const tickets = await this.ticketsService.findAllFor(user);
       if (tickets.length === 0) {
-        return 'The current user has no visible tickets right now.';
+        return 'The current user has no visible tasks right now.';
       }
       const lines = tickets.slice(0, MAX_TICKETS_IN_CONTEXT).map((t) => {
         const desc = t.description.length > 160 ? `${t.description.slice(0, 160)}…` : t.description;
@@ -82,13 +86,13 @@ export class ChatbotService {
       });
       const truncatedNote =
         tickets.length > MAX_TICKETS_IN_CONTEXT
-          ? `\n(${tickets.length - MAX_TICKETS_IN_CONTEXT} more ticket(s) not shown here.)`
+          ? `\n(${tickets.length - MAX_TICKETS_IN_CONTEXT} more task(s) not shown here.)`
           : '';
-      return `Tickets visible to the current user (${user.name}, role: ${user.role}):\n${lines.join('\n')}${truncatedNote}`;
+      return `Tasks visible to the current user (${user.name}, role: ${user.role}):\n${lines.join('\n')}${truncatedNote}`;
     } catch {
       // Chat should still work even if ticket context fails to load for
       // some reason (e.g. a role with no ticket access at all).
-      return 'Ticket context is unavailable right now.';
+      return 'Task context is unavailable right now.';
     }
   }
 

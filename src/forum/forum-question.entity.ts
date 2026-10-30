@@ -11,7 +11,14 @@ import {
 import { User } from '../users/user.entity';
 import { ForumReply } from './forum-reply.entity';
 
-// AO-only end to end: only Administrative Officers post, reply, or vote.
+export enum ForumQuestionStatus {
+  PENDING = 'pending', // waiting for an Administrator
+  APPROVED = 'approved', // visible to all AOs
+  REJECTED = 'rejected',
+}
+
+// AO-only: only Administrative Officers post, reply, or vote. A new question
+// is hidden until an Administrator approves it; replies need no approval.
 // Enforced in ForumService, not here.
 @Entity('forum_questions')
 export class ForumQuestion {
@@ -27,6 +34,19 @@ export class ForumQuestion {
 
   @Column({ type: 'text' })
   body: string;
+
+  @Column({ type: 'enum', enum: ForumQuestionStatus, default: ForumQuestionStatus.PENDING })
+  status: ForumQuestionStatus;
+
+  @ManyToOne(() => User, { nullable: true })
+  @JoinColumn({ name: 'reviewed_by_id' })
+  reviewedBy: User | null;
+
+  @Column({ name: 'reviewed_at', type: 'timestamptz', nullable: true })
+  reviewedAt: Date | null;
+
+  @Column({ name: 'reject_reason', type: 'varchar', nullable: true })
+  rejectReason: string | null;
 
   @Column({ default: 0 })
   upvotes: number;

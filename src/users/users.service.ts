@@ -219,7 +219,7 @@ export class UsersService implements OnApplicationBootstrap {
     return this.usersRepo.save(user);
   }
 
-  private async applyProfile(user: User, dto: UpdateProfileDto) {
+  async applyProfile(user: User, dto: UpdateProfileDto) {
     if (dto.firstName !== undefined) user.firstName = this.clean(dto.firstName);
     if (dto.middleName !== undefined) user.middleName = this.clean(dto.middleName);
     if (dto.lastName !== undefined) user.lastName = this.clean(dto.lastName);
@@ -233,6 +233,11 @@ export class UsersService implements OnApplicationBootstrap {
       const school = await this.schoolsService.findById(dto.schoolId);
       if (!school) throw new BadRequestException('Selected school does not exist');
       user.school = school;
+    }
+    // District and area always come from the school (Sta. Fe District, Area 1).
+    if (user.school) {
+      user.district = user.school.district;
+      user.area = user.school.area ?? '1';
     }
 
     const composed = this.composeName(user.firstName, user.middleName, user.lastName);
@@ -307,6 +312,12 @@ export class UsersService implements OnApplicationBootstrap {
         }
       }
       target.assignedSchools = schools;
+    } else if (dto.role === Role.SCHOOL) {
+      if (!target.school) {
+        throw new BadRequestException('This user has no school on their profile yet');
+      }
+      await this.assertSchoolAccountFree(target.school.id, target.id);
+      target.assignedSchools = [];
     } else {
       target.assignedSchools = [];
     }
@@ -316,6 +327,20 @@ export class UsersService implements OnApplicationBootstrap {
     target.approvedBy = admin;
     target.approvedAt = new Date();
     return this.usersRepo.save(target);
+  }
+
+  // One School account per school.
+  async assertSchoolAccountFree(schoolId: string, exceptUserId?: string) {
+    const existing = await this.usersRepo
+      .createQueryBuilder('user')
+      .innerJoin('user.school', 'school', 'school.id = :schoolId', { schoolId })
+      .where('user.role = :role', { role: Role.SCHOOL })
+      .andWhere('user.status != :rejected', { rejected: AccountStatus.REJECTED })
+      .getMany();
+    const other = existing.find((u) => u.id !== exceptUserId);
+    if (other) {
+      throw new BadRequestException(`This school already has a School account (${other.name})`);
+    }
   }
 
   async reject(admin: User, targetUserId: string): Promise<User> {
@@ -331,7 +356,7 @@ export class UsersService implements OnApplicationBootstrap {
 
   // ---- Administrator tools: add, edit, suspend ----
 
-  private normalizeEmail(email: string | undefined) {
+  normalizeEmail(email: string | undefined) {
     const e = (email ?? '').trim().toLowerCase();
     const domain = (process.env.ALLOWED_EMAIL_DOMAIN || 'deped.gov.ph').toLowerCase();
     if (!e || !e.endsWith(`@${domain}`)) {
@@ -342,7 +367,8 @@ export class UsersService implements OnApplicationBootstrap {
 
   async createUser(admin: User, dto: CreateUserDto): Promise<User> {
     this.assertAdmin(admin);
-    if (!dto.firstName?.trim() || !dto.lastName?.trim()) {
+    // School accounts are named after the school, so names are optional there.
+    if (dto.role !== Role.SCHOOL && (!dto.firstName?.trim() || !dto.lastName?.trim())) {
       throw new BadRequestException('First and last name are required');
     }
 
@@ -374,7 +400,7 @@ export class UsersService implements OnApplicationBootstrap {
         throw new ConflictException('An account with that email already exists');
       }
       if (!dto.role || dto.role === Role.ADMINISTRATOR || !Object.values(Role).includes(dto.role)) {
-        throw new BadRequestException('Choose Teacher, Administrative Officer or Administrative Office');
+        throw new BadRequestException('Choose Teacher, Administrative Officer, School or Publisher');
       }
       user.depedEmail = email;
       user.role = dto.role;
@@ -382,8 +408,12 @@ export class UsersService implements OnApplicationBootstrap {
 
     await this.applyProfile(user, dto);
 
-    if (user.role === Role.TEACHER && !user.school) {
-      throw new BadRequestException('Teachers need a school');
+    if ((user.role === Role.TEACHER || user.role === Role.SCHOOL) && !user.school) {
+      throw new BadRequestException('Teachers and School accounts need a school');
+    }
+    if (user.role === Role.SCHOOL) {
+      await this.assertSchoolAccountFree(user.school!.id);
+      if (!user.name) user.name = user.school!.name;
     }
     if (user.role === Role.ADMIN_OFFICER) {
       const ids = dto.assignedSchoolIds ?? [];

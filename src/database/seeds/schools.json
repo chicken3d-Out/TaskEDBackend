@@ -1,14 +1,21 @@
 [
-  {
-    "name": "Santa Fe Central School",
-    "district": "Santa Fe District"
-  },
-  {
-    "name": "Leyte National High School",
-    "district": "Leyte District"
-  },
-  {
-    "name": "Palo Central Elementary School",
-    "district": "Palo District"
-  }
+  { "name": "BADIANGAY ELEMENTARY SCHOOL", "district": "STA. FE DISTRICT", "area": "1" },
+  { "name": "BULOD ELEMENTARY SCHOOL", "district": "STA. FE DISTRICT", "area": "1" },
+  { "name": "CATOOGAN ELEMENTARY SCHOOL", "district": "STA. FE DISTRICT", "area": "1" },
+  { "name": "GAPAS ELEMENTARY SCHOOL", "district": "STA. FE DISTRICT", "area": "1" },
+  { "name": "KATIPUNAN ELEMENTARY SCHOOL", "district": "STA. FE DISTRICT", "area": "1" },
+  { "name": "MILAGROSA ELEMENTARY SCHOOL", "district": "STA. FE DISTRICT", "area": "1" },
+  { "name": "PILIT ELEMENTARY SCHOOL", "district": "STA. FE DISTRICT", "area": "1" },
+  { "name": "PITOGO ELEMENTARY SCHOOL", "district": "STA. FE DISTRICT", "area": "1" },
+  { "name": "SAN ISIDRO ELEMENTARY SCHOOL", "district": "STA. FE DISTRICT", "area": "1" },
+  { "name": "SAN JUAN ELEMENTARY SCHOOL", "district": "STA. FE DISTRICT", "area": "1" },
+  { "name": "SAN MIGUELAY ELEMENTARY SCHOOL", "district": "STA. FE DISTRICT", "area": "1" },
+  { "name": "SAN ROQUE ELEMENTARY SCHOOL", "district": "STA. FE DISTRICT", "area": "1" },
+  { "name": "STA. FE CENTRAL SCHOOL", "district": "STA. FE DISTRICT", "area": "1" },
+  { "name": "TIBAK ELEMENTARY SCHOOL", "district": "STA. FE DISTRICT", "area": "1" },
+  { "name": "VICTORIA ELEMENTARY SCHOOL", "district": "STA. FE DISTRICT", "area": "1" },
+  { "name": "BACULANAD ELEMENTARY SCHOOL", "district": "STA. FE DISTRICT", "area": "1" },
+  { "name": "CUTAY ELEMENTARY SCHOOL", "district": "STA. FE DISTRICT", "area": "1" },
+  { "name": "STA. FE NATIONAL HIGH SCHOOL", "district": "STA. FE DISTRICT", "area": "1" },
+  { "name": "STA. FE STAND ALONE SENIOR HIGH SCHOOL", "district": "STA. FE DISTRICT", "area": "1" }
 ]

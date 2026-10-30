@@ -41,7 +41,7 @@ export class SchoolsService implements OnApplicationBootstrap {
       this.logger.warn(`schools.json not found at ${file}`);
       return;
     }
-    const list: { name: string; district: string }[] = JSON.parse(readFileSync(file, 'utf8'));
+    const list: { name: string; district: string; area?: string }[] = JSON.parse(readFileSync(file, 'utf8'));
     let added = 0;
     for (const s of list) {
       const exists = await this.schoolsRepo.findOne({ where: { name: s.name } });

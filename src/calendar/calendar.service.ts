@@ -31,9 +31,9 @@ export class CalendarService {
   // Per spec: only Administrator and Admin Office (public-post) accounts
   // can create/edit calendar events and announcements.
   private assertCanManage(user: User) {
-    if (user.role !== Role.ADMINISTRATOR && user.role !== Role.ADMIN_OFFICE_ACCOUNT) {
+    if (user.role !== Role.ADMINISTRATOR && user.role !== Role.PUBLISHER) {
       throw new ForbiddenException(
-        'Only Administrators and Administrative Office accounts can manage the calendar',
+        'Only Administrators and Publishers can manage the calendar',
       );
     }
   }

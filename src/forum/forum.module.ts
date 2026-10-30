@@ -5,10 +5,11 @@ import { ForumReply } from './forum-reply.entity';
 import { ForumVote } from './forum-vote.entity';
 import { ForumService } from './forum.service';
 import { ForumController } from './forum.controller';
+import { User } from '../users/user.entity';
 import { NotificationsModule } from '../notifications/notifications.module';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([ForumQuestion, ForumReply, ForumVote]), NotificationsModule],
+  imports: [TypeOrmModule.forFeature([ForumQuestion, ForumReply, ForumVote, User]), NotificationsModule],
   controllers: [ForumController],
   providers: [ForumService],
   exports: [ForumService],

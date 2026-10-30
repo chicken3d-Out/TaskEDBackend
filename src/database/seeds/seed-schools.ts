@@ -4,7 +4,7 @@ import dataSource from '../data-source';
 import { School } from '../../schools/school.entity';
 
 // Edit schools.json (same folder) with the real SDO Leyte school list.
-const SCHOOLS: { name: string; district: string }[] = JSON.parse(
+const SCHOOLS: { name: string; district: string; area?: string }[] = JSON.parse(
   readFileSync(join(__dirname, 'schools.json'), 'utf8'),
 );
 

@@ -6,6 +6,9 @@ import { CalendarEvent } from '../calendar/calendar-event.entity';
 import { User } from '../users/user.entity';
 import { School } from '../schools/school.entity';
 import { AccountStatus, Role } from '../common/enums/role.enum';
+import { ForumQuestion, ForumQuestionStatus } from '../forum/forum-question.entity';
+import { SchoolDocumentType } from '../school-portal/school-document-type.entity';
+import { SchoolFile } from '../school-portal/school-file.entity';
 
 @Injectable()
 export class DashboardService {
@@ -14,6 +17,9 @@ export class DashboardService {
     @InjectRepository(CalendarEvent) private eventsRepo: Repository<CalendarEvent>,
     @InjectRepository(User) private usersRepo: Repository<User>,
     @InjectRepository(School) private schoolsRepo: Repository<School>,
+    @InjectRepository(ForumQuestion) private questionsRepo: Repository<ForumQuestion>,
+    @InjectRepository(SchoolDocumentType) private typesRepo: Repository<SchoolDocumentType>,
+    @InjectRepository(SchoolFile) private filesRepo: Repository<SchoolFile>,
   ) {}
 
   // Same visibility rules as TicketsService.findAllFor, kept here so the
@@ -35,7 +41,7 @@ export class DashboardService {
         order: { createdAt: 'DESC' },
       });
     }
-    return null; // e.g. Administrative Office accounts are not part of ticketing
+    return null; // Publisher and School accounts are not part of tasking
   }
 
   async summaryFor(user: User) {
@@ -77,6 +83,7 @@ export class DashboardService {
       pendingUsers: number;
       totalUsers: number;
       schools: number;
+      pendingQuestions: number;
       byRole: Record<string, number>;
     } = null;
     if (user.role === Role.ADMINISTRATOR) {
@@ -92,8 +99,41 @@ export class DashboardService {
         ).length,
         totalUsers: users.length,
         schools: await this.schoolsRepo.count(),
+        pendingQuestions: await this.questionsRepo.count({
+          where: { status: ForumQuestionStatus.PENDING },
+        }),
         byRole,
       };
+    }
+
+    // School account / AO: personnel counts and document progress per school.
+    let schoolsInfo: null | {
+      id: string;
+      name: string;
+      teachers: number;
+      pendingTeachers: number;
+      documentsUploaded: number;
+      documentsTotal: number;
+    }[] = null;
+    if (user.role === Role.SCHOOL || user.role === Role.ADMIN_OFFICER) {
+      const mine = user.role === Role.SCHOOL ? (user.school ? [user.school] : []) : (user.assignedSchools ?? []);
+      const types = await this.typesRepo.find({ where: { active: true } });
+      schoolsInfo = [];
+      for (const s of mine) {
+        const atSchool = await this.usersRepo.find({ where: { school: { id: s.id } } });
+        const files = await this.filesRepo.find({ where: { school: { id: s.id } } });
+        const done = new Set(files.filter((f) => types.some((t) => t.id === f.documentType.id)).map((f) => f.documentType.id));
+        schoolsInfo.push({
+          id: s.id,
+          name: s.name,
+          teachers: atSchool.filter((u) => u.role === Role.TEACHER && u.status === AccountStatus.APPROVED).length,
+          pendingTeachers: atSchool.filter(
+            (u) => !u.role && u.status === AccountStatus.PENDING && u.registrationComplete,
+          ).length,
+          documentsUploaded: done.size,
+          documentsTotal: types.length,
+        });
+      }
     }
 
     return {
@@ -106,6 +146,7 @@ export class DashboardService {
         zoomLink: e.zoomLink,
       })),
       admin,
+      schools: schoolsInfo,
     };
   }
 }

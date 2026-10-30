@@ -121,7 +121,7 @@ assigns roles in the app (Users page), or pre-registers staff by DepEd email.
   a calendar event, and vice versa"). `GET /calendar` (everyone,
   chronological), `GET /calendar/announcements` (only
   `isAnnouncement: true` and still upcoming), `POST/PATCH/DELETE
-  /calendar` (Administrator and Admin Office public-post accounts
+  /calendar` (Administrator and Publisher accounts
   only). A daily cron (`CalendarService.sendUpcomingReminders`, 7am)
   notifies every approved AO about events landing within 2 days -
   AOs are the only role that gets calendar reminders, per the spec.

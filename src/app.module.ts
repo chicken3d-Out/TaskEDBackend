@@ -13,6 +13,7 @@ import { WeatherModule } from './weather/weather.module';
 import { ChatbotModule } from './chatbot/chatbot.module';
 import { StorageModule } from './storage/storage.module';
 import { DashboardModule } from './dashboard/dashboard.module';
+import { SchoolPortalModule } from './school-portal/school-portal.module';
 import { User } from './users/user.entity';
 import { School } from './schools/school.entity';
 import { Ticket } from './tickets/ticket.entity';
@@ -23,6 +24,8 @@ import { CalendarEvent } from './calendar/calendar-event.entity';
 import { ForumQuestion } from './forum/forum-question.entity';
 import { ForumReply } from './forum/forum-reply.entity';
 import { ForumVote } from './forum/forum-vote.entity';
+import { SchoolDocumentType } from './school-portal/school-document-type.entity';
+import { SchoolFile } from './school-portal/school-file.entity';
 
 @Module({
   imports: [
@@ -50,6 +53,8 @@ import { ForumVote } from './forum/forum-vote.entity';
           ForumQuestion,
           ForumReply,
           ForumVote,
+          SchoolDocumentType,
+          SchoolFile,
         ],
         // Fine for local dev; switch to migrations (npm run migration:run)
         // before this ever touches a real deployment.
@@ -67,6 +72,7 @@ import { ForumVote } from './forum/forum-vote.entity';
     ChatbotModule,
     StorageModule,
     DashboardModule,
+    SchoolPortalModule,
   ],
 })
 export class AppModule {}

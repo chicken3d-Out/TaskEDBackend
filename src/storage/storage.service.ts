@@ -10,6 +10,11 @@ export const ALLOWED_UPLOAD_TYPES: Record<string, string[]> = {
   'application/pdf': ['.pdf'],
 };
 
+export const SCHOOL_FILE_FORMATS: Record<'soft' | 'scanned', string[]> = {
+  soft: ['pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx'],
+  scanned: ['pdf', 'jpg', 'jpeg', 'png'],
+};
+
 export type UploadPurpose = 'attachment' | 'avatar';
 
 export interface SignedUpload {
@@ -57,6 +62,26 @@ export class StorageService {
       .join('&');
     const signature = createHash('sha1').update(base + apiSecret).digest('hex');
 
+    return {
+      uploadUrl: `https://api.cloudinary.com/v1_1/${cloudName}/auto/upload`,
+      fields: { ...toSign, api_key: apiKey, signature },
+    };
+  }
+
+  // School files: a "soft copy" may be an Office document or PDF, a "scanned
+  // copy" a PDF or image. Cloudinary enforces the same list via allowed_formats.
+  signSchoolFile(schoolId: string, kind: 'soft' | 'scanned'): SignedUpload {
+    const { cloudName, apiKey, apiSecret } = this.creds();
+    const toSign: Record<string, string> = {
+      allowed_formats: SCHOOL_FILE_FORMATS[kind].join(','),
+      folder: `tasked/school-files/${schoolId}`,
+      timestamp: Math.floor(Date.now() / 1000).toString(),
+    };
+    const base = Object.keys(toSign)
+      .sort()
+      .map((k) => `${k}=${toSign[k]}`)
+      .join('&');
+    const signature = createHash('sha1').update(base + apiSecret).digest('hex');
     return {
       uploadUrl: `https://api.cloudinary.com/v1_1/${cloudName}/auto/upload`,
       fields: { ...toSign, api_key: apiKey, signature },

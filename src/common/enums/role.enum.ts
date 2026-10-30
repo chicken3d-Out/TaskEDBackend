@@ -1,8 +1,9 @@
 export enum Role {
   TEACHER = 'teacher',
   ADMIN_OFFICER = 'admin_officer', // Administrative Officer (AO), assigned to school(s)
-  ADMIN_OFFICE_ACCOUNT = 'admin_office_account', // public-post office account
-  ADMINISTRATOR = 'administrator', // top-level, approves AOs and public-post accounts
+  PUBLISHER = 'publisher', // posts calendar events and announcements (was "Administrative Office")
+  SCHOOL = 'school', // one account per school: school profile, teachers, school files
+  ADMINISTRATOR = 'administrator', // top-level: users, roles, approvals, forum moderation
 }
 
 export enum AccountStatus {

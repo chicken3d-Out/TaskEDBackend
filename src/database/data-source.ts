@@ -10,6 +10,8 @@ import { CalendarEvent } from '../calendar/calendar-event.entity';
 import { ForumQuestion } from '../forum/forum-question.entity';
 import { ForumReply } from '../forum/forum-reply.entity';
 import { ForumVote } from '../forum/forum-vote.entity';
+import { SchoolDocumentType } from '../school-portal/school-document-type.entity';
+import { SchoolFile } from '../school-portal/school-file.entity';
 
 export default new DataSource({
   type: 'postgres',
@@ -31,6 +33,8 @@ export default new DataSource({
     ForumQuestion,
     ForumReply,
     ForumVote,
+    SchoolDocumentType,
+    SchoolFile,
   ],
   migrations: ['src/database/migrations/*.ts'],
   synchronize: false,

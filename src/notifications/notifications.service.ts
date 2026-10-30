@@ -10,12 +10,13 @@ import { PushService } from '../push/push.service';
 // notification just uses `message` directly, but a push notification
 // needs a short title + body split.
 const PUSH_TITLES: Record<NotificationType, string> = {
-  [NotificationType.TICKET_UPDATE]: 'Ticket update',
+  [NotificationType.TICKET_UPDATE]: 'Task update',
   [NotificationType.ATTACHMENT_REQUEST]: 'Attachment requested',
-  [NotificationType.TICKET_STATUS_CHANGE]: 'Ticket status changed',
+  [NotificationType.TICKET_STATUS_CHANGE]: 'Task status changed',
   [NotificationType.ACCOUNT_APPROVED]: 'Account approved',
   [NotificationType.ACCOUNT_REJECTED]: 'Account update',
   [NotificationType.CALENDAR_REMINDER]: 'Upcoming event',
+  [NotificationType.FORUM_REVIEW]: 'Forum',
 };
 
 @Injectable()
