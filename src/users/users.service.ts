@@ -13,6 +13,7 @@ import * as bcrypt from 'bcryptjs';
 import { User } from './user.entity';
 import { Role, AccountStatus } from '../common/enums/role.enum';
 import { SchoolsService } from '../schools/schools.service';
+import { School } from '../schools/school.entity';
 
 export interface CompleteRegistrationDto {
   firstName: string;
@@ -42,7 +43,6 @@ export interface CreateUserDto {
   // staff
   depedEmail?: string;
   role?: Role;
-  assignedSchoolIds?: string[];
   // admin
   username?: string;
   password?: string;
@@ -56,7 +56,6 @@ export const MIN_PASSWORD_LENGTH = 10;
 
 export interface AssignRoleDto {
   role: Role;
-  assignedSchoolIds?: string[]; // required for ADMIN_OFFICER (1+)
 }
 
 @Injectable()
@@ -234,6 +233,11 @@ export class UsersService implements OnApplicationBootstrap {
       if (!school) throw new BadRequestException('Selected school does not exist');
       user.school = school;
     }
+    // An AO's school is always the school on their profile.
+    if (user.role === Role.ADMIN_OFFICER && user.school && dto.schoolId) {
+      await this.assertAoSchoolFree(user.school, user.id);
+      user.assignedSchools = [user.school];
+    }
     // District and area always come from the school (Sta. Fe District, Area 1).
     if (user.school) {
       user.district = user.school.district;
@@ -294,24 +298,13 @@ export class UsersService implements OnApplicationBootstrap {
       }
       target.assignedSchools = [];
     } else if (dto.role === Role.ADMIN_OFFICER) {
-      const ids = dto.assignedSchoolIds ?? [];
-      if (ids.length === 0) {
-        throw new BadRequestException('Select at least one school for an Administrative Officer');
+      // An Administrative Officer handles exactly one school: the school on
+      // their own profile. One AO per school.
+      if (!target.school) {
+        throw new BadRequestException('This user has no school on their profile yet');
       }
-      const schools = await this.schoolsService.findByIds(ids);
-      if (schools.length !== ids.length) {
-        throw new BadRequestException('One or more selected schools do not exist');
-      }
-      // Business rule: exactly one AO per school.
-      for (const school of schools) {
-        const existing = await this.findAoForSchool(school.id);
-        if (existing && existing.id !== target.id) {
-          throw new BadRequestException(
-            `${school.name} already has an Administrative Officer (${existing.name})`,
-          );
-        }
-      }
-      target.assignedSchools = schools;
+      await this.assertAoSchoolFree(target.school, target.id);
+      target.assignedSchools = [target.school];
     } else if (dto.role === Role.SCHOOL) {
       if (!target.school) {
         throw new BadRequestException('This user has no school on their profile yet');
@@ -327,6 +320,16 @@ export class UsersService implements OnApplicationBootstrap {
     target.approvedBy = admin;
     target.approvedAt = new Date();
     return this.usersRepo.save(target);
+  }
+
+  // One Administrative Officer per school.
+  async assertAoSchoolFree(school: School, exceptUserId?: string) {
+    const existing = await this.findAoForSchool(school.id);
+    if (existing && existing.id !== exceptUserId) {
+      throw new BadRequestException(
+        `${school.name} already has an Administrative Officer (${existing.name})`,
+      );
+    }
   }
 
   // One School account per school.
@@ -416,23 +419,9 @@ export class UsersService implements OnApplicationBootstrap {
       if (!user.name) user.name = user.school!.name;
     }
     if (user.role === Role.ADMIN_OFFICER) {
-      const ids = dto.assignedSchoolIds ?? [];
-      if (ids.length === 0) {
-        throw new BadRequestException('Select at least one school for an Administrative Officer');
-      }
-      const schools = await this.schoolsService.findByIds(ids);
-      if (schools.length !== ids.length) {
-        throw new BadRequestException('One or more selected schools do not exist');
-      }
-      for (const school of schools) {
-        const existing = await this.findAoForSchool(school.id);
-        if (existing) {
-          throw new BadRequestException(
-            `${school.name} already has an Administrative Officer (${existing.name})`,
-          );
-        }
-      }
-      user.assignedSchools = schools;
+      if (!user.school) throw new BadRequestException('Choose the school of this Administrative Officer');
+      await this.assertAoSchoolFree(user.school);
+      user.assignedSchools = [user.school];
     }
     return this.usersRepo.save(user);
   }
@@ -449,7 +438,19 @@ export class UsersService implements OnApplicationBootstrap {
       }
       target.depedEmail = email;
     }
-    await this.applyProfile(target, dto);
+    // Only an Administrator assigns schools. An empty schoolId clears it, so an
+    // AO can be set to blank to free the school for another AO.
+    if (dto.schoolId === '') {
+      if (target.role === Role.ADMINISTRATOR) throw new BadRequestException('Administrators have no school');
+      target.school = null;
+      target.assignedSchools = [];
+      target.district = null as any;
+      target.area = null;
+      const { schoolId: _drop, ...rest } = dto;
+      await this.applyProfile(target, rest);
+    } else {
+      await this.applyProfile(target, dto);
+    }
     return this.usersRepo.save(target);
   }
 
@@ -498,7 +499,13 @@ export class UsersService implements OnApplicationBootstrap {
   async updateProfile(userId: string, fields: UpdateProfileDto): Promise<User> {
     const user = await this.findById(userId);
     if (!user) throw new NotFoundException('User not found');
-    await this.applyProfile(user, fields);
+    // Once a school is on the profile, only an Administrator can change it:
+    // a school decides whose tasks and data a person can see.
+    const { schoolId, ...rest } = fields;
+    if (schoolId && user.school && schoolId !== user.school.id) {
+      throw new ForbiddenException('Only an Administrator can change your school');
+    }
+    await this.applyProfile(user, schoolId && !user.school ? fields : rest);
     return this.usersRepo.save(user);
   }
 

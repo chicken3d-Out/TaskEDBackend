@@ -55,9 +55,8 @@ export class ForumService {
       name: u.name,
       avatarUrl: u.avatarUrl ?? null,
       designation: u.designation ?? null,
-      school: u.assignedSchools?.length
-        ? u.assignedSchools.map((s) => s.name).join(', ')
-        : (u.school?.name ?? null),
+      // The school on the person's own profile; blank when not set.
+      school: u.school?.name ?? null,
       district: u.district ?? null,
       area: u.area ?? null,
     };
