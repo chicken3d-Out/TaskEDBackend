@@ -24,9 +24,9 @@ How TaskEd works:
   can see - but not edit - other teachers' tasks at their own school for
   transparency), Administrative Officer / AO (processes tasks for their
   assigned school(s), can request attachments and change task status,
-  and can manage the teachers of their schools), School (one account per
-  school: manages the school profile, the teachers of the school, and
-  uploads school files such as the Annual Implementation Plan), Publisher
+  and can manage the teachers of their schools), School Head and School (one
+  each per school: manage the school profile, the teachers of the school, and
+  upload school files such as the Annual Implementation Plan), Publisher
   (posts public calendar events and announcements), and Administrator
   (signs in with a username and password; adds users, assigns roles,
   approves accounts, approves forum questions, and sets which school

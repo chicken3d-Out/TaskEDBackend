@@ -2,23 +2,30 @@ import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PassportStrategy } from '@nestjs/passport';
 import { Strategy, StrategyOptions, VerifyCallback } from 'passport-google-oauth20';
+import { CALENDAR_SCOPE, DRIVE_SCOPE, GoogleService } from '../google/google.service';
 
 export interface GoogleProfilePayload {
   googleId: string;
   email: string;
   name: string;
+  refreshToken?: string;
+  scopes: string;
 }
 
 @Injectable()
 export class GoogleStrategy extends PassportStrategy(Strategy, 'google') {
   private readonly allowedDomain: string;
 
-  constructor(private config: ConfigService) {
+  constructor(
+    private config: ConfigService,
+    private google: GoogleService,
+  ) {
     const options: StrategyOptions = {
       clientID: config.get<string>('GOOGLE_CLIENT_ID')!,
       clientSecret: config.get<string>('GOOGLE_CLIENT_SECRET')!,
       callbackURL: config.get<string>('GOOGLE_CALLBACK_URL')!,
-      scope: ['email', 'profile'],
+      // Drive (only files TaskEd creates) and Calendar events, for each person's own account.
+      scope: ['email', 'profile', DRIVE_SCOPE, CALENDAR_SCOPE],
       // hd nudges Google's account chooser toward the workspace domain, but
       // it is NOT trustworthy as a security check on its own (a user could
       // still complete the flow with a personal account in some setups) -
@@ -29,8 +36,8 @@ export class GoogleStrategy extends PassportStrategy(Strategy, 'google') {
   }
 
   async validate(
-    _accessToken: string,
-    _refreshToken: string,
+    accessToken: string,
+    refreshToken: string,
     profile: any,
     done: VerifyCallback,
   ): Promise<void> {
@@ -52,7 +59,8 @@ export class GoogleStrategy extends PassportStrategy(Strategy, 'google') {
       );
     }
 
-    const payload: GoogleProfilePayload = { googleId, email, name };
+    const scopes = await this.google.grantedScopes(accessToken);
+    const payload: GoogleProfilePayload = { googleId, email, name, refreshToken: refreshToken || undefined, scopes };
     done(null, payload as any);
   }
 }

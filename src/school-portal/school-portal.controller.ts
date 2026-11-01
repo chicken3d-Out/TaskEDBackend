@@ -1,4 +1,8 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Res, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { memoryStorage } from 'multer';
+import { Response } from 'express';
+import { MAX_UPLOAD_BYTES, pipeToClient } from '../common/file-types';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { ApprovedGuard } from '../common/guards/approved.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
@@ -10,7 +14,7 @@ import { SchoolPortalService, SchoolProfileDto, TeacherDto } from './school-port
 
 // School accounts, AOs (for their schools) and Administrators.
 @UseGuards(JwtAuthGuard, ApprovedGuard, RolesGuard)
-@Roles(Role.SCHOOL, Role.ADMIN_OFFICER, Role.ADMINISTRATOR)
+@Roles(Role.SCHOOL, Role.SCHOOL_HEAD, Role.ADMIN_OFFICER, Role.ADMINISTRATOR)
 @Controller('school-portal')
 export class SchoolPortalController {
   constructor(private portal: SchoolPortalService) {}
@@ -110,22 +114,26 @@ export class SchoolPortalController {
     return this.portal.listFiles(user, id);
   }
 
-  @Post('schools/:id/files/sign')
-  sign(
+  @Post('schools/:id/files/upload')
+  @UseInterceptors(FileInterceptor('file', { storage: memoryStorage(), limits: { fileSize: MAX_UPLOAD_BYTES } }))
+  upload(
     @CurrentUser() user: User,
     @Param('id') id: string,
-    @Body() body: { fileName: string; kind: string },
+    @Body() body: { documentTypeId: string; kind: string },
+    @UploadedFile() file: Express.Multer.File,
   ) {
-    return this.portal.signUpload(user, id, body.fileName, body.kind);
+    return this.portal.uploadFile(user, id, body.documentTypeId, body.kind, file);
   }
 
-  @Post('schools/:id/files')
-  saveFile(
+  @Get('schools/:id/files/:fileId/download')
+  async download(
     @CurrentUser() user: User,
     @Param('id') id: string,
-    @Body() body: { documentTypeId: string; kind: string; fileName: string; fileUrl: string },
+    @Param('fileId') fileId: string,
+    @Res() res: Response,
   ) {
-    return this.portal.saveFile(user, id, body);
+    const { res: source, name, mime } = await this.portal.downloadFile(user, id, fileId);
+    pipeToClient(res, source, name, mime);
   }
 
   @Delete('schools/:id/files/:fileId')

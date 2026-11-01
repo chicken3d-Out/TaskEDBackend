@@ -8,6 +8,7 @@ import { Role, AccountStatus } from '../common/enums/role.enum';
 import { NotificationsService } from '../notifications/notifications.service';
 import { NotificationsGateway } from '../notifications/notifications.gateway';
 import { NotificationType } from '../notifications/notification.entity';
+import { GoogleCalendarSyncService } from '../google/google-calendar-sync.service';
 
 export interface UpsertCalendarEventDto {
   title: string;
@@ -26,6 +27,7 @@ export class CalendarService {
     @InjectRepository(User) private usersRepo: Repository<User>,
     private notificationsService: NotificationsService,
     private realtimeGateway: NotificationsGateway,
+    private googleSync: GoogleCalendarSyncService,
   ) {}
 
   // Per spec: only Administrator and Admin Office (public-post) accounts
@@ -49,6 +51,7 @@ export class CalendarService {
       createdBy: user,
     });
     const saved = await this.repo.save(event);
+    this.googleSync.pushEventToEveryone(saved);
     this.realtimeGateway.broadcast('calendar:changed', {});
     return saved;
   }
@@ -65,6 +68,7 @@ export class CalendarService {
     if (dto.isAnnouncement !== undefined) event.isAnnouncement = dto.isAnnouncement;
 
     const saved = await this.repo.save(event);
+    this.googleSync.pushEventToEveryone(saved);
     this.realtimeGateway.broadcast('calendar:changed', {});
     return saved;
   }
@@ -73,6 +77,7 @@ export class CalendarService {
     this.assertCanManage(user);
     const event = await this.repo.findOne({ where: { id } });
     if (!event) throw new NotFoundException('Event not found');
+    await this.googleSync.removeEventFromEveryone(event.id);
     await this.repo.remove(event);
     this.realtimeGateway.broadcast('calendar:changed', {});
   }

@@ -115,8 +115,8 @@ export class DashboardService {
       documentsUploaded: number;
       documentsTotal: number;
     }[] = null;
-    if (user.role === Role.SCHOOL || user.role === Role.ADMIN_OFFICER) {
-      const mine = user.role === Role.SCHOOL ? (user.school ? [user.school] : []) : (user.assignedSchools ?? []);
+    if (user.role === Role.SCHOOL || user.role === Role.SCHOOL_HEAD || user.role === Role.ADMIN_OFFICER) {
+      const mine = user.role === Role.SCHOOL || user.role === Role.SCHOOL_HEAD ? (user.school ? [user.school] : []) : (user.assignedSchools ?? []);
       const types = await this.typesRepo.find({ where: { active: true } });
       schoolsInfo = [];
       for (const s of mine) {

@@ -8,9 +8,14 @@ import { AuthGuard } from '@nestjs/passport';
 export class GoogleAuthGuard extends AuthGuard('google') {
   getAuthenticateOptions(context: ExecutionContext) {
     const req = context.switchToHttp().getRequest();
-    if (req.query?.platform === 'mobile') {
-      return { state: 'mobile' };
-    }
-    return {};
+    // offline access gives us a refresh token for Drive and Calendar.
+    // `reconnect=1` forces Google's consent screen again (to repair access).
+    const options: Record<string, unknown> = {
+      accessType: 'offline',
+      includeGrantedScopes: true,
+      ...(req.query?.reconnect === '1' ? { prompt: 'consent' } : {}),
+    };
+    if (req.query?.platform === 'mobile') options['state'] = 'mobile';
+    return options;
   }
 }

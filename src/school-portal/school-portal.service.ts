@@ -13,7 +13,9 @@ import { AccountStatus, Role } from '../common/enums/role.enum';
 import { UsersService, UpdateProfileDto } from '../users/users.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { NotificationType } from '../notifications/notification.entity';
-import { SCHOOL_FILE_FORMATS, StorageService } from '../storage/storage.service';
+import { SCHOOL_FILE_FORMATS, assertAllowedFile, mimeFor } from '../common/file-types';
+import { schoolYearLabel, schoolYearOf } from '../common/school-year';
+import { DRIVE_SCOPE, GoogleService } from '../google/google.service';
 import { SchoolDocumentType } from './school-document-type.entity';
 import { SchoolFile, SchoolFileKind } from './school-file.entity';
 
@@ -50,7 +52,7 @@ export class SchoolPortalService {
     @InjectRepository(SchoolFile) private filesRepo: Repository<SchoolFile>,
     private usersService: UsersService,
     private notifications: NotificationsService,
-    private storage: StorageService,
+    private google: GoogleService,
   ) {}
 
   // ---- access rules ----
@@ -59,7 +61,7 @@ export class SchoolPortalService {
   // Edit profile / upload files: Administrator or the school's own School account.
   private canView(user: User, schoolId: string) {
     if (user.role === Role.ADMINISTRATOR) return true;
-    if (user.role === Role.SCHOOL) return user.school?.id === schoolId;
+    if (user.role === Role.SCHOOL || user.role === Role.SCHOOL_HEAD) return user.school?.id === schoolId;
     if (user.role === Role.ADMIN_OFFICER) return (user.assignedSchools ?? []).some((s) => s.id === schoolId);
     return false;
   }
@@ -67,11 +69,14 @@ export class SchoolPortalService {
     if (!this.canView(user, schoolId)) throw new ForbiddenException('You do not have access to this school');
   }
   private canEdit(user: User, schoolId: string) {
-    return user.role === Role.ADMINISTRATOR || (user.role === Role.SCHOOL && user.school?.id === schoolId);
+    return (
+      user.role === Role.ADMINISTRATOR ||
+      ((user.role === Role.SCHOOL || user.role === Role.SCHOOL_HEAD) && user.school?.id === schoolId)
+    );
   }
   private assertEdit(user: User, schoolId: string) {
     if (!this.canEdit(user, schoolId)) {
-      throw new ForbiddenException('Only the school account or an Administrator can do this');
+      throw new ForbiddenException('Only the School account, the School Head or an Administrator can do this');
     }
   }
   private async getSchool(id: string): Promise<School> {
@@ -85,7 +90,7 @@ export class SchoolPortalService {
     if (user.role === Role.ADMINISTRATOR) {
       return this.schoolsRepo.find({ order: { name: 'ASC' } });
     }
-    if (user.role === Role.SCHOOL) return user.school ? [user.school] : [];
+    if (user.role === Role.SCHOOL || user.role === Role.SCHOOL_HEAD) return user.school ? [user.school] : [];
     if (user.role === Role.ADMIN_OFFICER) return user.assignedSchools ?? [];
     return [];
   }
@@ -95,7 +100,7 @@ export class SchoolPortalService {
     const schools = await this.schoolsRepo.find({ order: { name: 'ASC' } });
     const users = await this.usersRepo.find();
     const activeTypes = await this.typesRepo.count({ where: { active: true } });
-    const files = await this.filesRepo.find({ relations: ['school'] });
+    const files = await this.filesRepo.find({ where: { schoolYear: schoolYearOf() }, relations: ['school'] });
     return schools.map((s) => {
       const atSchool = users.filter((u) => u.school?.id === s.id);
       const ao = users.find(
@@ -112,6 +117,7 @@ export class SchoolPortalService {
         teachers: atSchool.filter((u) => u.role === Role.TEACHER && u.status === AccountStatus.APPROVED).length,
         pendingTeachers: atSchool.filter((u) => !u.role && u.status === AccountStatus.PENDING && u.registrationComplete).length,
         schoolAccount: atSchool.find((u) => u.role === Role.SCHOOL && u.status !== AccountStatus.REJECTED)?.name ?? null,
+        schoolHead: atSchool.find((u) => u.role === Role.SCHOOL_HEAD && u.status === AccountStatus.APPROVED)?.name ?? s.schoolHeadName ?? null,
         ao: ao?.name ?? null,
         documentsUploaded: types.size,
         documentsTotal: activeTypes,
@@ -137,13 +143,18 @@ export class SchoolPortalService {
     const atSchool = await this.usersRepo.find({ where: { school: { id: schoolId } } });
     const aos = await this.usersService.findAOsForSchool(schoolId);
     const account = atSchool.find((u) => u.role === Role.SCHOOL && u.status !== AccountStatus.REJECTED);
+    const head = atSchool.find((u) => u.role === Role.SCHOOL_HEAD && u.status === AccountStatus.APPROVED);
     return {
       school,
       canEdit: this.canEdit(user, schoolId),
       personnel: {
-        schoolHead: school.schoolHeadName
-          ? { name: school.schoolHeadName, contactNumber: school.schoolHeadContact }
-          : null,
+        // The School Head account of this school; falls back to the name typed
+        // in the school profile when nobody holds that role yet.
+        schoolHead: head
+          ? this.mini(head)
+          : school.schoolHeadName
+            ? { id: null, name: school.schoolHeadName, avatarUrl: null, designation: 'School Head', contactNumber: school.schoolHeadContact, depedEmail: null, status: null }
+            : null,
         schoolAccount: account ? this.mini(account) : null,
         administrativeOfficers: aos.map((u) => this.mini(u)),
         teachers: atSchool
@@ -332,29 +343,50 @@ export class SchoolPortalService {
   }
 
   // ---- school files ----
+  // Files are kept in the uploader's own Google Drive, in
+  // TaskEd / School Files / <school> / S.Y. xxxx-xxxx / <document>.
+  // Access is decided here, not in Drive: the downloads below stream through
+  // TaskEd after checking who is asking.
+  private canUploadFiles(user: User, schoolId: string) {
+    return (user.role === Role.SCHOOL || user.role === Role.SCHOOL_HEAD) && user.school?.id === schoolId;
+  }
+
   async listFiles(user: User, schoolId: string) {
     this.assertView(user, schoolId);
     const types = await this.listTypes(user);
-    const files = await this.filesRepo.find({
+    const all = await this.filesRepo.find({
       where: { school: { id: schoolId } },
       relations: ['uploadedBy'],
+      order: { createdAt: 'DESC' },
     });
+    const current = schoolYearOf();
     const view = (f?: SchoolFile) =>
       f
         ? {
             id: f.id,
             fileName: f.fileName,
-            fileUrl: f.fileUrl,
             uploadedBy: f.uploadedBy?.name ?? null,
             createdAt: f.createdAt,
           }
         : null;
+    const now = all.filter((f) => f.schoolYear === current);
+    const old = all.filter((f) => f.schoolYear !== current);
+    const years = [...new Set(old.map((f) => f.schoolYear))].sort().reverse();
     return {
-      canUpload: this.canEdit(user, schoolId),
+      canUpload: this.canUploadFiles(user, schoolId),
+      driveConnected: await this.google.hasScope(user.id, DRIVE_SCOPE),
+      currentYear: current,
       documents: types.map((t) => ({
         type: t,
-        soft: view(files.find((f) => f.documentType.id === t.id && f.kind === 'soft')),
-        scanned: view(files.find((f) => f.documentType.id === t.id && f.kind === 'scanned')),
+        soft: view(now.find((f) => f.documentType.id === t.id && f.kind === 'soft')),
+        scanned: view(now.find((f) => f.documentType.id === t.id && f.kind === 'scanned')),
+      })),
+      // Earlier school years, newest first (shown collapsed).
+      archive: years.map((sy) => ({
+        schoolYear: sy,
+        files: old
+          .filter((f) => f.schoolYear === sy)
+          .map((f) => ({ ...view(f)!, document: f.documentType?.name ?? '', kind: f.kind })),
       })),
     };
   }
@@ -363,56 +395,103 @@ export class SchoolPortalService {
     if (kind !== 'soft' && kind !== 'scanned') throw new BadRequestException('Kind must be soft or scanned');
   }
 
-  signUpload(user: User, schoolId: string, fileName: string, kind: string) {
-    this.assertEdit(user, schoolId);
-    this.assertKind(kind);
-    const ext = (fileName ?? '').toLowerCase().split('.').pop() ?? '';
-    if (!SCHOOL_FILE_FORMATS[kind].includes(ext)) {
-      throw new BadRequestException(
-        `A ${kind === 'soft' ? 'soft copy' : 'scanned copy'} must be: ${SCHOOL_FILE_FORMATS[kind].join(', ')}`,
-      );
-    }
-    return this.storage.signSchoolFile(schoolId, kind);
-  }
-
-  async saveFile(
+  async uploadFile(
     user: User,
     schoolId: string,
-    dto: { documentTypeId: string; kind: string; fileName: string; fileUrl: string },
+    documentTypeId: string,
+    kind: string,
+    file: Express.Multer.File | undefined,
   ) {
-    this.assertEdit(user, schoolId);
-    this.assertKind(dto.kind);
-    if (!/^https:\/\/res\.cloudinary\.com\//.test(dto.fileUrl ?? '')) {
-      throw new BadRequestException('Invalid file address');
+    if (!this.canUploadFiles(user, schoolId)) {
+      throw new ForbiddenException('Only the School account or the School Head of this school can upload files');
+    }
+    this.assertKind(kind);
+    const info = assertAllowedFile(file, SCHOOL_FILE_FORMATS[kind]);
+    if (!(await this.google.hasScope(user.id, DRIVE_SCOPE))) {
+      throw new BadRequestException(
+        'Google Drive is not connected. Use "Connect Google Drive" and allow access, then try again.',
+      );
     }
     const school = await this.getSchool(schoolId);
-    const type = await this.typesRepo.findOne({ where: { id: dto.documentTypeId, active: true } });
+    const type = await this.typesRepo.findOne({ where: { id: documentTypeId, active: true } });
     if (!type) throw new NotFoundException('Document type not found');
+    const sy = schoolYearOf();
+
+    const folder = await this.google.ensureFolderPath(user.id, [
+      'TaskEd',
+      'School Files',
+      school.name,
+      schoolYearLabel(sy),
+      type.name,
+    ]);
+    const stored = await this.google.uploadFile(
+      user.id,
+      folder,
+      `${kind === 'soft' ? 'Soft copy' : 'Scanned copy'} - ${info.name}`,
+      info.mime,
+      file!.buffer,
+    );
 
     const existing = await this.filesRepo.findOne({
-      where: { school: { id: schoolId }, documentType: { id: type.id }, kind: dto.kind },
+      where: { school: { id: schoolId }, documentType: { id: type.id }, kind, schoolYear: sy },
+      relations: ['uploadedBy'],
     });
-    const file = existing ?? this.filesRepo.create({ school, documentType: type, kind: dto.kind });
-    file.fileName = (dto.fileName ?? '').slice(0, 200) || 'file';
-    file.fileUrl = dto.fileUrl;
-    file.uploadedBy = user;
-    await this.filesRepo.save(file);
+    const previous = existing ? { driveFileId: existing.driveFileId, owner: existing.uploadedBy?.id } : null;
+    const row = existing ?? this.filesRepo.create({ school, documentType: type, kind, schoolYear: sy });
+    row.fileName = info.name;
+    row.fileUrl = null;
+    row.driveFileId = stored.id;
+    row.mimeType = info.mime;
+    row.uploadedBy = user;
+    try {
+      await this.filesRepo.save(row);
+    } catch (e) {
+      await this.google.deleteFile(user.id, stored.id);
+      throw e;
+    }
+    // The replaced copy is removed from its owner's Drive.
+    if (previous?.driveFileId && previous.owner) await this.google.deleteFile(previous.owner, previous.driveFileId);
     return { ok: true };
   }
 
   async deleteFile(user: User, schoolId: string, fileId: string) {
     this.assertEdit(user, schoolId);
-    const file = await this.filesRepo.findOne({ where: { id: fileId, school: { id: schoolId } } });
+    const file = await this.filesRepo.findOne({
+      where: { id: fileId, school: { id: schoolId } },
+      relations: ['uploadedBy'],
+    });
     if (!file) throw new NotFoundException('File not found');
+    if (file.driveFileId && file.uploadedBy) await this.google.deleteFile(file.uploadedBy.id, file.driveFileId);
     await this.filesRepo.remove(file);
     return { ok: true };
+  }
+
+  // Checks who is asking, then streams the file from the owner's Drive.
+  async downloadFile(user: User, schoolId: string, fileId: string) {
+    this.assertView(user, schoolId);
+    const file = await this.filesRepo.findOne({
+      where: { id: fileId, school: { id: schoolId } },
+      relations: ['uploadedBy'],
+    });
+    if (!file) throw new NotFoundException('File not found');
+    const mime = file.mimeType ?? mimeFor(file.fileName);
+    if (file.driveFileId && file.uploadedBy) {
+      return { res: await this.google.downloadFile(file.uploadedBy.id, file.driveFileId), name: file.fileName, mime };
+    }
+    if (file.fileUrl) {
+      // Older files stored on Cloudinary.
+      const res = await fetch(file.fileUrl);
+      if (!res.ok) throw new BadRequestException('Could not open the file');
+      return { res, name: file.fileName, mime };
+    }
+    throw new NotFoundException('File not found');
   }
 
   // Used by the dashboard.
   async fileProgress(schoolId: string) {
     const types = await this.typesRepo.find({ where: { active: true } });
     const files = await this.filesRepo.find({
-      where: { school: { id: schoolId }, documentType: { id: In(types.map((t) => t.id)) } },
+      where: { school: { id: schoolId }, schoolYear: schoolYearOf(), documentType: { id: In(types.map((t) => t.id)) } },
     });
     const done = new Set(files.map((f) => f.documentType.id));
     return { uploaded: done.size, total: types.length };

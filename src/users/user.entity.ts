@@ -33,6 +33,14 @@ export class User {
   @Column({ name: 'password_hash', type: 'varchar', nullable: true, select: false })
   passwordHash?: string | null;
 
+  // Google access for Drive and Calendar, granted at sign-in. The refresh
+  // token is stored encrypted and never leaves the server.
+  @Column({ name: 'google_refresh_token', type: 'text', nullable: true, select: false })
+  googleRefreshToken?: string | null;
+
+  @Column({ name: 'google_scopes', type: 'text', nullable: true })
+  googleScopes: string | null;
+
   // Display name, kept in sync from first/middle/last (see UsersService.composeName).
   @Column({ nullable: true })
   name: string;
@@ -121,7 +129,14 @@ export class User {
 
   // Getters aren't serialized by default; the frontend routes on this flag.
   toJSON() {
-    const { passwordHash: _omit, ...rest } = this as any;
-    return { ...rest, profileComplete: this.registrationComplete };
+    const { passwordHash: _omit, googleRefreshToken: _omit2, googleScopes: _omit3, ...rest } = this as any;
+    const scopes = this.googleScopes ?? '';
+    return {
+      ...rest,
+      profileComplete: this.registrationComplete,
+      // Whether Google access was granted at the last sign-in (tokens are checked on use).
+      googleDrive: scopes.includes('drive.file'),
+      googleCalendar: scopes.includes('calendar.events'),
+    };
   }
 }

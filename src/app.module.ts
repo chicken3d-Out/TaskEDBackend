@@ -14,6 +14,11 @@ import { ChatbotModule } from './chatbot/chatbot.module';
 import { StorageModule } from './storage/storage.module';
 import { DashboardModule } from './dashboard/dashboard.module';
 import { SchoolPortalModule } from './school-portal/school-portal.module';
+import { GoogleModule } from './google/google.module';
+import { MyFilesModule } from './my-files/my-files.module';
+import { GoogleEventLink } from './google/google-event-link.entity';
+import { PersonalEvent } from './google/personal-event.entity';
+import { PersonalFile } from './my-files/personal-file.entity';
 import { User } from './users/user.entity';
 import { School } from './schools/school.entity';
 import { Ticket } from './tickets/ticket.entity';
@@ -55,6 +60,9 @@ import { SchoolFile } from './school-portal/school-file.entity';
           ForumVote,
           SchoolDocumentType,
           SchoolFile,
+          GoogleEventLink,
+          PersonalEvent,
+          PersonalFile,
         ],
         // Fine for local dev; switch to migrations (npm run migration:run)
         // before this ever touches a real deployment.
@@ -73,6 +81,8 @@ import { SchoolFile } from './school-portal/school-file.entity';
     StorageModule,
     DashboardModule,
     SchoolPortalModule,
+    GoogleModule,
+    MyFilesModule,
   ],
 })
 export class AppModule {}
