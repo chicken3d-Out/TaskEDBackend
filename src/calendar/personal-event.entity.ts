@@ -1,10 +1,10 @@
 import { Column, Entity, Index, JoinColumn, ManyToOne, PrimaryGeneratedColumn } from 'typeorm';
 import { User } from '../users/user.entity';
 
-// An event that comes from one person's own Google Calendar. It is private:
-// only that person sees it in TaskEd.
+// An event read from one person's own Google Calendar (through the private
+// iCal link they paste in). It is private: only that person sees it in TaskEd.
 @Entity('personal_events')
-@Index(['user', 'googleEventId'], { unique: true })
+@Index(['user', 'uid'], { unique: true })
 export class PersonalEvent {
   @PrimaryGeneratedColumn('uuid')
   id: string;
@@ -13,8 +13,9 @@ export class PersonalEvent {
   @JoinColumn({ name: 'user_id' })
   user: User;
 
-  @Column({ name: 'google_event_id' })
-  googleEventId: string;
+  // calendar UID plus start time, so each repeat of a recurring event is its own row
+  @Column()
+  uid: string;
 
   @Column()
   title: string;

@@ -13,9 +13,10 @@ import { SchoolDocumentType } from './school-document-type.entity';
 
 export type SchoolFileKind = 'soft' | 'scanned';
 
-// One slot per school + document type + kind + school year; uploading again
-// replaces it. New files live in the uploader's own Google Drive (driveFileId);
-// older ones were stored on Cloudinary (fileUrl).
+// One slot per school + document type + kind + school year; saving a new
+// link replaces it. The file itself stays in the uploader's own cloud storage
+// (Google Drive or OneDrive); only its share link is kept here (older files
+// were uploaded to Cloudinary and keep their URL in the same column).
 @Entity('school_files')
 @Index(['school', 'documentType', 'kind', 'schoolYear'], { unique: true })
 export class SchoolFile {
@@ -36,14 +37,8 @@ export class SchoolFile {
   @Column({ name: 'file_name', type: 'varchar' })
   fileName: string;
 
-  @Column({ name: 'file_url', type: 'varchar', nullable: true })
-  fileUrl: string | null;
-
-  @Column({ name: 'drive_file_id', type: 'varchar', nullable: true })
-  driveFileId: string | null;
-
-  @Column({ name: 'mime_type', type: 'varchar', nullable: true })
-  mimeType: string | null;
+  @Column({ name: 'file_url', type: 'varchar' })
+  fileUrl: string;
 
   // e.g. "2025-2026" (shown as "S.Y. 2025-2026")
   @Column({ name: 'school_year' })

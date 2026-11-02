@@ -1,11 +1,9 @@
 import { Injectable, Logger, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
-import { AccountStatus, Role } from '../common/enums/role.enum';
+import { Role } from '../common/enums/role.enum';
 import { UsersService } from '../users/users.service';
 import { User } from '../users/user.entity';
 import { GoogleProfilePayload } from './google.strategy';
-import { GoogleService } from '../google/google.service';
-import { GoogleCalendarSyncService } from '../google/google-calendar-sync.service';
 
 export class AdministratorUsesPasswordError extends UnauthorizedException {
   constructor() {
@@ -20,8 +18,6 @@ export class AuthService {
   constructor(
     private usersService: UsersService,
     private jwtService: JwtService,
-    private google: GoogleService,
-    private calendarSync: GoogleCalendarSyncService,
   ) {}
 
   // DepEd Google sign-in is for regular users (teachers, Administrative
@@ -45,11 +41,7 @@ export class AuthService {
       this.logger.warn(`Google sign-in refused for administrator account ${user.id}`);
       throw new AdministratorUsesPasswordError();
     }
-    // Keep the Google access granted at this sign-in (Drive and Calendar).
-    await this.google.saveTokens(user.id, profile.refreshToken, profile.scopes);
-    const fresh = (await this.usersService.findById(user.id)) ?? user;
-    if (fresh.status === AccountStatus.APPROVED && profile.refreshToken) this.calendarSync.syncAfterConnect(fresh);
-    return fresh;
+    return (await this.usersService.findById(user.id)) ?? user;
   }
 
   async handleAdminLogin(username: string, password: string): Promise<User> {

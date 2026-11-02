@@ -6,6 +6,7 @@ import {
   Param,
   Patch,
   Post,
+  Put,
   UseGuards,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
@@ -13,14 +14,14 @@ import { ApprovedGuard } from '../common/guards/approved.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { User } from '../users/user.entity';
 import { CalendarService, UpsertCalendarEventDto } from './calendar.service';
-import { GoogleCalendarSyncService } from '../google/google-calendar-sync.service';
+import { IcalSyncService } from './ical-sync.service';
 
 @UseGuards(JwtAuthGuard, ApprovedGuard)
 @Controller('calendar')
 export class CalendarController {
   constructor(
     private calendarService: CalendarService,
-    private googleSync: GoogleCalendarSyncService,
+    private ical: IcalSyncService,
   ) {}
 
   @Get()
@@ -31,14 +32,24 @@ export class CalendarController {
   // Private to the signed-in person: events read from their own Google Calendar.
   @Get('personal')
   personal(@CurrentUser() user: User) {
-    return this.googleSync.personalEvents(user.id);
+    return this.ical.personalEvents(user.id);
   }
 
-  // Refreshes both directions for the signed-in person (rate-limited).
-  @Post('google/sync')
-  async sync(@CurrentUser() user: User, @Body() body: { force?: boolean }) {
-    const result = await this.googleSync.syncUser(user, !!body?.force);
-    return { ...result, events: await this.googleSync.personalEvents(user.id) };
+  // Saves the person's private Google Calendar (iCal) link and reads it.
+  @Put('ical')
+  link(@CurrentUser() user: User, @Body() body: { url?: string }) {
+    return this.ical.link(user, body?.url ?? '');
+  }
+
+  @Delete('ical')
+  unlink(@CurrentUser() user: User) {
+    return this.ical.unlink(user);
+  }
+
+  // Reads the person's Google Calendar again (rate-limited unless forced).
+  @Post('ical/sync')
+  sync(@CurrentUser() user: User, @Body() body: { force?: boolean }) {
+    return this.ical.sync(user, !!body?.force);
   }
 
   @Get('announcements')

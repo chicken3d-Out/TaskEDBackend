@@ -1,8 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Res, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
-import { FileInterceptor } from '@nestjs/platform-express';
-import { memoryStorage } from 'multer';
-import { Response } from 'express';
-import { MAX_UPLOAD_BYTES, pipeToClient } from '../common/file-types';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Put, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { ApprovedGuard } from '../common/guards/approved.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
@@ -114,26 +110,14 @@ export class SchoolPortalController {
     return this.portal.listFiles(user, id);
   }
 
-  @Post('schools/:id/files/upload')
-  @UseInterceptors(FileInterceptor('file', { storage: memoryStorage(), limits: { fileSize: MAX_UPLOAD_BYTES } }))
-  upload(
+  // Saves the share link of a file kept in the person's own Google Drive / OneDrive.
+  @Put('schools/:id/files')
+  saveLink(
     @CurrentUser() user: User,
     @Param('id') id: string,
-    @Body() body: { documentTypeId: string; kind: string },
-    @UploadedFile() file: Express.Multer.File,
+    @Body() body: { documentTypeId: string; kind: string; link: string; fileName?: string },
   ) {
-    return this.portal.uploadFile(user, id, body.documentTypeId, body.kind, file);
-  }
-
-  @Get('schools/:id/files/:fileId/download')
-  async download(
-    @CurrentUser() user: User,
-    @Param('id') id: string,
-    @Param('fileId') fileId: string,
-    @Res() res: Response,
-  ) {
-    const { res: source, name, mime } = await this.portal.downloadFile(user, id, fileId);
-    pipeToClient(res, source, name, mime);
+    return this.portal.saveFileLink(user, id, body);
   }
 
   @Delete('schools/:id/files/:fileId')

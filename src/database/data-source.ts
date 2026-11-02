@@ -12,8 +12,7 @@ import { ForumReply } from '../forum/forum-reply.entity';
 import { ForumVote } from '../forum/forum-vote.entity';
 import { SchoolDocumentType } from '../school-portal/school-document-type.entity';
 import { SchoolFile } from '../school-portal/school-file.entity';
-import { GoogleEventLink } from '../google/google-event-link.entity';
-import { PersonalEvent } from '../google/personal-event.entity';
+import { PersonalEvent } from '../calendar/personal-event.entity';
 import { PersonalFile } from '../my-files/personal-file.entity';
 
 export default new DataSource({
@@ -38,7 +37,6 @@ export default new DataSource({
     ForumVote,
     SchoolDocumentType,
     SchoolFile,
-    GoogleEventLink,
     PersonalEvent,
     PersonalFile,
   ],

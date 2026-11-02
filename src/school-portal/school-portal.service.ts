@@ -13,9 +13,8 @@ import { AccountStatus, Role } from '../common/enums/role.enum';
 import { UsersService, UpdateProfileDto } from '../users/users.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { NotificationType } from '../notifications/notification.entity';
-import { SCHOOL_FILE_FORMATS, assertAllowedFile, mimeFor } from '../common/file-types';
-import { schoolYearLabel, schoolYearOf } from '../common/school-year';
-import { DRIVE_SCOPE, GoogleService } from '../google/google.service';
+import { cleanLink } from '../common/links';
+import { schoolYearOf } from '../common/school-year';
 import { SchoolDocumentType } from './school-document-type.entity';
 import { SchoolFile, SchoolFileKind } from './school-file.entity';
 
@@ -52,7 +51,6 @@ export class SchoolPortalService {
     @InjectRepository(SchoolFile) private filesRepo: Repository<SchoolFile>,
     private usersService: UsersService,
     private notifications: NotificationsService,
-    private google: GoogleService,
   ) {}
 
   // ---- access rules ----
@@ -343,10 +341,10 @@ export class SchoolPortalService {
   }
 
   // ---- school files ----
-  // Files are kept in the uploader's own Google Drive, in
-  // TaskEd / School Files / <school> / S.Y. xxxx-xxxx / <document>.
-  // Access is decided here, not in Drive: the downloads below stream through
-  // TaskEd after checking who is asking.
+  // Files stay in the uploader's own Google Drive / OneDrive. TaskEd keeps only
+  // the share link, per school year. Only people allowed to view the school
+  // are ever shown the link, and the uploader decides who the link is shared
+  // with in their own storage.
   private canUploadFiles(user: User, schoolId: string) {
     return (user.role === Role.SCHOOL || user.role === Role.SCHOOL_HEAD) && user.school?.id === schoolId;
   }
@@ -365,6 +363,7 @@ export class SchoolPortalService {
         ? {
             id: f.id,
             fileName: f.fileName,
+            link: f.fileUrl,
             uploadedBy: f.uploadedBy?.name ?? null,
             createdAt: f.createdAt,
           }
@@ -374,7 +373,6 @@ export class SchoolPortalService {
     const years = [...new Set(old.map((f) => f.schoolYear))].sort().reverse();
     return {
       canUpload: this.canUploadFiles(user, schoolId),
-      driveConnected: await this.google.hasScope(user.id, DRIVE_SCOPE),
       currentYear: current,
       documents: types.map((t) => ({
         type: t,
@@ -395,96 +393,40 @@ export class SchoolPortalService {
     if (kind !== 'soft' && kind !== 'scanned') throw new BadRequestException('Kind must be soft or scanned');
   }
 
-  async uploadFile(
+  async saveFileLink(
     user: User,
     schoolId: string,
-    documentTypeId: string,
-    kind: string,
-    file: Express.Multer.File | undefined,
+    dto: { documentTypeId: string; kind: string; link: string; fileName?: string },
   ) {
     if (!this.canUploadFiles(user, schoolId)) {
-      throw new ForbiddenException('Only the School account or the School Head of this school can upload files');
+      throw new ForbiddenException('Only the School account or the School Head of this school can add files');
     }
-    this.assertKind(kind);
-    const info = assertAllowedFile(file, SCHOOL_FILE_FORMATS[kind]);
-    if (!(await this.google.hasScope(user.id, DRIVE_SCOPE))) {
-      throw new BadRequestException(
-        'Google Drive is not connected. Use "Connect Google Drive" and allow access, then try again.',
-      );
-    }
+    this.assertKind(dto.kind);
+    const link = cleanLink(dto.link);
     const school = await this.getSchool(schoolId);
-    const type = await this.typesRepo.findOne({ where: { id: documentTypeId, active: true } });
+    const type = await this.typesRepo.findOne({ where: { id: dto.documentTypeId, active: true } });
     if (!type) throw new NotFoundException('Document type not found');
     const sy = schoolYearOf();
-
-    const folder = await this.google.ensureFolderPath(user.id, [
-      'TaskEd',
-      'School Files',
-      school.name,
-      schoolYearLabel(sy),
-      type.name,
-    ]);
-    const stored = await this.google.uploadFile(
-      user.id,
-      folder,
-      `${kind === 'soft' ? 'Soft copy' : 'Scanned copy'} - ${info.name}`,
-      info.mime,
-      file!.buffer,
-    );
+    const name = (dto.fileName ?? '').trim().slice(0, 150) || (dto.kind === 'soft' ? 'Soft copy' : 'Scanned copy');
 
     const existing = await this.filesRepo.findOne({
-      where: { school: { id: schoolId }, documentType: { id: type.id }, kind, schoolYear: sy },
-      relations: ['uploadedBy'],
+      where: { school: { id: schoolId }, documentType: { id: type.id }, kind: dto.kind, schoolYear: sy },
     });
-    const previous = existing ? { driveFileId: existing.driveFileId, owner: existing.uploadedBy?.id } : null;
-    const row = existing ?? this.filesRepo.create({ school, documentType: type, kind, schoolYear: sy });
-    row.fileName = info.name;
-    row.fileUrl = null;
-    row.driveFileId = stored.id;
-    row.mimeType = info.mime;
+    const row = existing ?? this.filesRepo.create({ school, documentType: type, kind: dto.kind, schoolYear: sy });
+    row.fileName = name;
+    row.fileUrl = link;
     row.uploadedBy = user;
-    try {
-      await this.filesRepo.save(row);
-    } catch (e) {
-      await this.google.deleteFile(user.id, stored.id);
-      throw e;
-    }
-    // The replaced copy is removed from its owner's Drive.
-    if (previous?.driveFileId && previous.owner) await this.google.deleteFile(previous.owner, previous.driveFileId);
+    await this.filesRepo.save(row);
     return { ok: true };
   }
 
+  // Removes the link from TaskEd. The file itself stays in the owner's storage.
   async deleteFile(user: User, schoolId: string, fileId: string) {
     this.assertEdit(user, schoolId);
-    const file = await this.filesRepo.findOne({
-      where: { id: fileId, school: { id: schoolId } },
-      relations: ['uploadedBy'],
-    });
+    const file = await this.filesRepo.findOne({ where: { id: fileId, school: { id: schoolId } } });
     if (!file) throw new NotFoundException('File not found');
-    if (file.driveFileId && file.uploadedBy) await this.google.deleteFile(file.uploadedBy.id, file.driveFileId);
     await this.filesRepo.remove(file);
     return { ok: true };
-  }
-
-  // Checks who is asking, then streams the file from the owner's Drive.
-  async downloadFile(user: User, schoolId: string, fileId: string) {
-    this.assertView(user, schoolId);
-    const file = await this.filesRepo.findOne({
-      where: { id: fileId, school: { id: schoolId } },
-      relations: ['uploadedBy'],
-    });
-    if (!file) throw new NotFoundException('File not found');
-    const mime = file.mimeType ?? mimeFor(file.fileName);
-    if (file.driveFileId && file.uploadedBy) {
-      return { res: await this.google.downloadFile(file.uploadedBy.id, file.driveFileId), name: file.fileName, mime };
-    }
-    if (file.fileUrl) {
-      // Older files stored on Cloudinary.
-      const res = await fetch(file.fileUrl);
-      if (!res.ok) throw new BadRequestException('Could not open the file');
-      return { res, name: file.fileName, mime };
-    }
-    throw new NotFoundException('File not found');
   }
 
   // Used by the dashboard.

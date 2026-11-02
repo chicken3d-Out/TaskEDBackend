@@ -2,8 +2,8 @@ import { Column, CreateDateColumn, Entity, Index, JoinColumn, ManyToOne, Primary
 import { User } from '../users/user.entity';
 
 // A file a Teacher, School Head or Administrative Officer keeps for
-// themselves. The file lives in their own Google Drive; only its Drive id,
-// label and school year are kept here. Private to the owner.
+// themselves. The file stays in their own Google Drive / OneDrive; only its
+// share link, label, category and school year are kept here. Private to the owner.
 @Entity('personal_files')
 @Index(['owner', 'schoolYear'])
 export class PersonalFile {
@@ -20,17 +20,8 @@ export class PersonalFile {
   @Column({ type: 'varchar', nullable: true })
   category: string | null;
 
-  @Column({ name: 'file_name' })
-  fileName: string;
-
-  @Column({ name: 'mime_type', type: 'varchar' })
-  mimeType: string;
-
-  @Column({ type: 'int', default: 0 })
-  size: number;
-
-  @Column({ name: 'drive_file_id' })
-  driveFileId: string;
+  @Column({ type: 'varchar', length: 1500 })
+  link: string;
 
   // e.g. "2025-2026" (shown as "S.Y. 2025-2026")
   @Column({ name: 'school_year' })
