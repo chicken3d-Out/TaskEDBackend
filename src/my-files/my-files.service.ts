@@ -5,7 +5,7 @@ import { User } from '../users/user.entity';
 import { Role } from '../common/enums/role.enum';
 import { PersonalFile } from './personal-file.entity';
 import { cleanLink } from '../common/links';
-import { schoolYearOf } from '../common/school-year';
+import { schoolYearOf, validSchoolYear } from '../common/school-year';
 
 const ALLOWED_ROLES = [Role.TEACHER, Role.SCHOOL_HEAD, Role.ADMIN_OFFICER];
 
@@ -38,7 +38,7 @@ export class MyFilesService {
     return { currentYear: schoolYearOf(), files: files.map((f) => this.view(f)) };
   }
 
-  async add(user: User, dto: { label?: string; category?: string; link?: string }) {
+  async add(user: User, dto: { label?: string; category?: string; link?: string; schoolYear?: string }) {
     this.assertAllowed(user);
     const label = (dto.label ?? '').trim().slice(0, 150);
     if (!label) throw new BadRequestException('A label is required');
@@ -48,7 +48,7 @@ export class MyFilesService {
         label,
         category: (dto.category ?? '').trim().slice(0, 60) || null,
         link: cleanLink(dto.link),
-        schoolYear: schoolYearOf(),
+        schoolYear: dto.schoolYear ? validSchoolYear(dto.schoolYear) : schoolYearOf(),
       }),
     );
     return this.view(saved);
@@ -61,7 +61,7 @@ export class MyFilesService {
     return f;
   }
 
-  async update(user: User, id: string, dto: { label?: string; category?: string; link?: string }) {
+  async update(user: User, id: string, dto: { label?: string; category?: string; link?: string; schoolYear?: string }) {
     const f = await this.own(user, id);
     if (dto.label !== undefined) {
       if (!dto.label.trim()) throw new BadRequestException('A label is required');
@@ -69,6 +69,7 @@ export class MyFilesService {
     }
     if (dto.category !== undefined) f.category = dto.category.trim().slice(0, 60) || null;
     if (dto.link !== undefined) f.link = cleanLink(dto.link);
+    if (dto.schoolYear !== undefined) f.schoolYear = validSchoolYear(dto.schoolYear);
     return this.view(await this.repo.save(f));
   }
 

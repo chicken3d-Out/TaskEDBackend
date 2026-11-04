@@ -115,7 +115,7 @@ export class SchoolPortalController {
   saveLink(
     @CurrentUser() user: User,
     @Param('id') id: string,
-    @Body() body: { documentTypeId: string; kind: string; link: string; fileName?: string },
+    @Body() body: { documentTypeId: string; kind: string; link: string; fileName?: string; schoolYear?: string },
   ) {
     return this.portal.saveFileLink(user, id, body);
   }

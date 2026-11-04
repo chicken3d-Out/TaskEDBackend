@@ -20,12 +20,38 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
   @WebSocketServer()
   server: Server;
 
+  // socket id -> user id, so we know who is online (several tabs/devices
+  // of one user count as one online user).
+  private sockets = new Map<string, string>();
+
   handleConnection(_client: Socket) {}
-  handleDisconnect(_client: Socket) {}
+
+  handleDisconnect(client: Socket) {
+    const userId = this.sockets.get(client.id);
+    this.sockets.delete(client.id);
+    if (userId && !this.isOnline(userId)) this.broadcast('presence:changed', {});
+  }
 
   @SubscribeMessage('join')
   handleJoin(client: Socket, userId: string) {
+    if (typeof userId !== 'string' || !userId) return;
     client.join(`user:${userId}`);
+    const was = this.isOnline(userId);
+    this.sockets.set(client.id, userId);
+    if (!was) this.broadcast('presence:changed', {});
+  }
+
+  isOnline(userId: string): boolean {
+    for (const id of this.sockets.values()) if (id === userId) return true;
+    return false;
+  }
+
+  onlineUserIds(): string[] {
+    return [...new Set(this.sockets.values())];
+  }
+
+  pushEvent(userId: string, event: string, payload: unknown) {
+    this.server?.to(`user:${userId}`).emit(event, payload);
   }
 
   pushToUser(userId: string, notification: Notification) {

@@ -1,4 +1,4 @@
-import {
+import { Put,
   Body,
   Controller,
   Get,
@@ -48,6 +48,11 @@ export class UsersController {
   @Patch('me')
   updateProfile(@CurrentUser() user: User, @Body() body: UpdateProfileDto) {
     return this.usersService.updateProfile(user.id, body);
+  }
+
+  @Put('me/drive-folder')
+  setDriveFolder(@CurrentUser() user: User, @Body() body: { url?: string }) {
+    return this.usersService.setDriveFolder(user.id, body?.url);
   }
 
   // Called by the Ionic/Capacitor app after it registers for FCM push -

@@ -16,12 +16,12 @@ export class MyFilesController {
   }
 
   @Post()
-  add(@CurrentUser() user: User, @Body() body: { label?: string; category?: string; link?: string }) {
+  add(@CurrentUser() user: User, @Body() body: { label?: string; category?: string; link?: string; schoolYear?: string }) {
     return this.service.add(user, body ?? {});
   }
 
   @Patch(':id')
-  update(@CurrentUser() user: User, @Param('id') id: string, @Body() body: { label?: string; category?: string; link?: string }) {
+  update(@CurrentUser() user: User, @Param('id') id: string, @Body() body: { label?: string; category?: string; link?: string; schoolYear?: string }) {
     return this.service.update(user, id, body ?? {});
   }
 

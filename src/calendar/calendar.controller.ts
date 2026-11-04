@@ -15,6 +15,7 @@ import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { User } from '../users/user.entity';
 import { CalendarService, UpsertCalendarEventDto } from './calendar.service';
 import { IcalSyncService } from './ical-sync.service';
+import { HolidaysService } from './holidays.service';
 
 @UseGuards(JwtAuthGuard, ApprovedGuard)
 @Controller('calendar')
@@ -22,6 +23,7 @@ export class CalendarController {
   constructor(
     private calendarService: CalendarService,
     private ical: IcalSyncService,
+    private holidays: HolidaysService,
   ) {}
 
   @Get()
@@ -50,6 +52,12 @@ export class CalendarController {
   @Post('ical/sync')
   sync(@CurrentUser() user: User, @Body() body: { force?: boolean }) {
     return this.ical.sync(user, !!body?.force);
+  }
+
+  // Philippine holidays (public Google calendar, read by the server).
+  @Get('holidays')
+  holidayList() {
+    return this.holidays.list();
   }
 
   @Get('announcements')

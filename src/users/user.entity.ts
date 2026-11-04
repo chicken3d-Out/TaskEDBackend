@@ -42,6 +42,11 @@ export class User {
   @Column({ name: 'calendar_linked', default: false })
   calendarLinked: boolean;
 
+  // The person's own Google Drive folder (they create it by hand and paste the
+  // link in Settings). TaskEd never accesses it; it only offers an "Open" button.
+  @Column({ name: 'drive_folder_url', type: 'varchar', length: 1500, nullable: true })
+  driveFolderUrl: string | null;
+
   // Display name, kept in sync from first/middle/last (see UsersService.composeName).
   @Column({ nullable: true })
   name: string;

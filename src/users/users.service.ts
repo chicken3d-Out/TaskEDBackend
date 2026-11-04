@@ -7,6 +7,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { cleanFolderLink } from '../common/links';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import * as bcrypt from 'bcryptjs';
@@ -530,6 +531,12 @@ export class UsersService implements OnApplicationBootstrap {
     }
     await this.applyProfile(user, schoolId && !user.school ? fields : rest);
     return this.usersRepo.save(user);
+  }
+
+  // Settings: the person's own Drive folder link (empty clears it).
+  async setDriveFolder(userId: string, url: string | undefined) {
+    await this.usersRepo.update(userId, { driveFolderUrl: cleanFolderLink(url) } as any);
+    return this.findById(userId);
   }
 
   async savePushToken(userId: string, token: string): Promise<{ ok: true }> {

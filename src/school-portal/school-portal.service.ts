@@ -14,7 +14,7 @@ import { UsersService, UpdateProfileDto } from '../users/users.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { NotificationType } from '../notifications/notification.entity';
 import { cleanLink } from '../common/links';
-import { schoolYearOf } from '../common/school-year';
+import { schoolYearOf, validSchoolYear } from '../common/school-year';
 import { SchoolDocumentType } from './school-document-type.entity';
 import { SchoolFile, SchoolFileKind } from './school-file.entity';
 
@@ -368,24 +368,29 @@ export class SchoolPortalService {
             createdAt: f.createdAt,
           }
         : null;
-    const now = all.filter((f) => f.schoolYear === current);
-    const old = all.filter((f) => f.schoolYear !== current);
-    const years = [...new Set(old.map((f) => f.schoolYear))].sort().reverse();
+    // The current school year, every year that already has files, and the
+    // last few years so earlier documents can still be added.
+    const startOf = (sy: string) => Number(sy.slice(0, 4));
+    const years = new Set<string>([current, ...all.map((f) => f.schoolYear)]);
+    const selectable = new Set<string>(years);
+    for (let i = 1; i <= 5; i++) selectable.add(`${startOf(current) - i}-${startOf(current) - i + 1}`);
+    const newestFirst = (a: string, b: string) => b.localeCompare(a);
     return {
       canUpload: this.canUploadFiles(user, schoolId),
       currentYear: current,
-      documents: types.map((t) => ({
-        type: t,
-        soft: view(now.find((f) => f.documentType.id === t.id && f.kind === 'soft')),
-        scanned: view(now.find((f) => f.documentType.id === t.id && f.kind === 'scanned')),
-      })),
-      // Earlier school years, newest first (shown collapsed).
-      archive: years.map((sy) => ({
-        schoolYear: sy,
-        files: old
-          .filter((f) => f.schoolYear === sy)
-          .map((f) => ({ ...view(f)!, document: f.documentType?.name ?? '', kind: f.kind })),
-      })),
+      selectableYears: [...selectable].sort(newestFirst),
+      // Newest school year first; the page shows them as collapsible sections.
+      years: [...years].sort(newestFirst).map((sy) => {
+        const inYear = all.filter((f) => f.schoolYear === sy);
+        return {
+          schoolYear: sy,
+          documents: types.map((t) => ({
+            type: t,
+            soft: view(inYear.find((f) => f.documentType.id === t.id && f.kind === 'soft')),
+            scanned: view(inYear.find((f) => f.documentType.id === t.id && f.kind === 'scanned')),
+          })),
+        };
+      }),
     };
   }
 
@@ -396,7 +401,7 @@ export class SchoolPortalService {
   async saveFileLink(
     user: User,
     schoolId: string,
-    dto: { documentTypeId: string; kind: string; link: string; fileName?: string },
+    dto: { documentTypeId: string; kind: string; link: string; fileName?: string; schoolYear?: string },
   ) {
     if (!this.canUploadFiles(user, schoolId)) {
       throw new ForbiddenException('Only the School account or the School Head of this school can add files');
@@ -406,7 +411,9 @@ export class SchoolPortalService {
     const school = await this.getSchool(schoolId);
     const type = await this.typesRepo.findOne({ where: { id: dto.documentTypeId, active: true } });
     if (!type) throw new NotFoundException('Document type not found');
-    const sy = schoolYearOf();
+    const current = schoolYearOf();
+    const sy = dto.schoolYear ? validSchoolYear(dto.schoolYear) : current;
+    if (sy > current) throw new BadRequestException('You cannot add files to a school year that has not started.');
     const name = (dto.fileName ?? '').trim().slice(0, 150) || (dto.kind === 'soft' ? 'Soft copy' : 'Scanned copy');
 
     const existing = await this.filesRepo.findOne({
