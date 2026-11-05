@@ -68,10 +68,7 @@ export class ChatbotService {
     this.apiKey = this.config.get<string>('OPENROUTER_API_KEY');
     // OpenRouter's free lineup shifts over time - override via env instead
     // of a code change if this one gets retired or replaced.
-    this.model = this.config.get<string>(
-      'OPENROUTER_MODEL',
-      'deepseek/deepseek-v4-flash:free',
-    );
+    this.model = this.config.get<string>('OPENROUTER_MODEL', 'openrouter/free');
   }
 
   private async buildTicketContext(user: User): Promise<string> {
@@ -112,33 +109,44 @@ export class ChatbotService {
       { role: 'user', content: message },
     ];
 
-    let res: Response;
-    try {
-      res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${this.apiKey}`,
-          'Content-Type': 'application/json',
-          // Optional but recommended by OpenRouter so usage attributes
-          // correctly to this app on their leaderboards/dashboards.
-          'HTTP-Referer': this.config.get<string>('FRONTEND_URL', 'http://localhost:4200'),
-          'X-Title': 'TaskEd',
-        },
-        body: JSON.stringify({ model: this.model, messages }),
-      });
-    } catch {
-      throw new BadGatewayException('Could not reach the chatbot service');
+    // Try the configured model first, then backups, because free models on
+    // OpenRouter come and go or get rate-limited. "openrouter/free" lets
+    // OpenRouter pick any free model that is currently available.
+    const models = [...new Set([this.model, 'openrouter/free', 'google/gemma-4-31b-it:free', 'qwen/qwen3.8-27b:free'])];
+    let res: Response | null = null;
+    let lastError = '';
+    for (const model of models) {
+      try {
+        const r = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${this.apiKey}`,
+            'Content-Type': 'application/json',
+            'HTTP-Referer': this.config.get<string>('FRONTEND_URL', 'http://localhost:4200'),
+            'X-Title': 'TaskEd',
+          },
+          body: JSON.stringify({ model, messages }),
+        });
+        if (r.ok) {
+          res = r;
+          break;
+        }
+        lastError = `${r.status}: ${(await r.text().catch(() => '')).slice(0, 200)}`;
+        // A bad key will fail for every model, so stop right away.
+        if (r.status === 401 || r.status === 403) break;
+      } catch {
+        lastError = 'network error';
+      }
     }
-
-    if (!res.ok) {
-      const bodyText = await res.text().catch(() => '');
-      throw new BadGatewayException(
-        `Chatbot service returned an error (${res.status}): ${bodyText.slice(0, 300)}`,
-      );
+    if (!res) {
+      if (lastError.startsWith('401') || lastError.startsWith('403')) {
+        throw new BadGatewayException('The assistant\'s OpenRouter key was rejected. Ask the Administrator to check it.');
+      }
+      throw new BadGatewayException('The assistant is busy right now. Please try again in a minute.');
     }
 
     const data = await res.json();
-    const reply = data?.choices?.[0]?.message?.content;
+    const reply = data?.choices?.[0]?.message?.content?.trim();
     if (!reply) {
       throw new BadGatewayException('Chatbot service returned an empty response');
     }

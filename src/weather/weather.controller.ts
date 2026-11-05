@@ -8,6 +8,11 @@ import { WeatherService } from './weather.service';
 export class WeatherController {
   constructor(private weatherService: WeatherService) {}
 
+  @Get('search')
+  search(@Query('q') q: string) {
+    return this.weatherService.search(q);
+  }
+
   @Get()
   getForecast(@Query('lat') lat: string, @Query('lon') lon: string) {
     return this.weatherService.getForecast(parseFloat(lat), parseFloat(lon));
