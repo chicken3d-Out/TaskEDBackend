@@ -15,6 +15,13 @@ export class MyFilesController {
     return this.service.list(user);
   }
 
+  // Public client id of TaskEd's Google sign-in app; the browser needs it to
+  // ask for permission to save files into the person's own Drive.
+  @Get('drive-config')
+  driveConfig() {
+    return { clientId: process.env.GOOGLE_CLIENT_ID ?? '' };
+  }
+
   @Post()
   add(@CurrentUser() user: User, @Body() body: { label?: string; category?: string; link?: string; schoolYear?: string }) {
     return this.service.add(user, body ?? {});

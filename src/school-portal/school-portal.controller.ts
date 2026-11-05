@@ -103,25 +103,4 @@ export class SchoolPortalController {
   deleteType(@CurrentUser() user: User, @Param('id') id: string) {
     return this.portal.deleteType(user, id);
   }
-
-  // ---- school files ----
-  @Get('schools/:id/files')
-  files(@CurrentUser() user: User, @Param('id') id: string) {
-    return this.portal.listFiles(user, id);
-  }
-
-  // Saves the share link of a file kept in the person's own Google Drive / OneDrive.
-  @Put('schools/:id/files')
-  saveLink(
-    @CurrentUser() user: User,
-    @Param('id') id: string,
-    @Body() body: { documentTypeId: string; kind: string; link: string; fileName?: string; schoolYear?: string },
-  ) {
-    return this.portal.saveFileLink(user, id, body);
-  }
-
-  @Delete('schools/:id/files/:fileId')
-  deleteFile(@CurrentUser() user: User, @Param('id') id: string, @Param('fileId') fileId: string) {
-    return this.portal.deleteFile(user, id, fileId);
-  }
 }

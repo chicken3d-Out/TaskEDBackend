@@ -50,11 +50,6 @@ export class UsersController {
     return this.usersService.updateProfile(user.id, body);
   }
 
-  @Put('me/drive-folder')
-  setDriveFolder(@CurrentUser() user: User, @Body() body: { url?: string }) {
-    return this.usersService.setDriveFolder(user.id, body?.url);
-  }
-
   // Called by the Ionic/Capacitor app after it registers for FCM push -
   // never called from the web build (there's no equivalent there).
   @Post('me/push-token')

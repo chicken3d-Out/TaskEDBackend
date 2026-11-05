@@ -7,7 +7,7 @@ import { PersonalFile } from './personal-file.entity';
 import { cleanLink } from '../common/links';
 import { schoolYearOf, validSchoolYear } from '../common/school-year';
 
-const ALLOWED_ROLES = [Role.TEACHER, Role.SCHOOL_HEAD, Role.ADMIN_OFFICER];
+const ALLOWED_ROLES = [Role.TEACHER, Role.SCHOOL_HEAD, Role.ADMIN_OFFICER, Role.PUBLISHER, Role.SCHOOL];
 
 // "My files": a private, organised list of links to files the person keeps in
 // their own Google Drive / OneDrive, grouped by school year and category.
@@ -17,7 +17,7 @@ export class MyFilesService {
 
   private assertAllowed(user: User) {
     if (!ALLOWED_ROLES.includes(user.role as Role)) {
-      throw new ForbiddenException('My files is for Teachers, School Heads and Administrative Officers');
+      throw new ForbiddenException('My files is for Teachers, Administrative Officers, Publishers, School Heads and School accounts');
     }
   }
 

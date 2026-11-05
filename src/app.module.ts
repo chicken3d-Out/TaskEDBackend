@@ -16,6 +16,7 @@ import { DashboardModule } from './dashboard/dashboard.module';
 import { SchoolPortalModule } from './school-portal/school-portal.module';
 import { MyFilesModule } from './my-files/my-files.module';
 import { PersonalEvent } from './calendar/personal-event.entity';
+import { CalendarNote } from './calendar/calendar-note.entity';
 import { PersonalFile } from './my-files/personal-file.entity';
 import { User } from './users/user.entity';
 import { School } from './schools/school.entity';
@@ -60,6 +61,7 @@ import { SchoolFile } from './school-portal/school-file.entity';
           SchoolFile,
           PersonalEvent,
           PersonalFile,
+          CalendarNote,
         ],
         // Fine for local dev; switch to migrations (npm run migration:run)
         // before this ever touches a real deployment.

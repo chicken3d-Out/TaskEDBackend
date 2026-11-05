@@ -15,6 +15,7 @@ import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { User } from '../users/user.entity';
 import { CalendarService, UpsertCalendarEventDto } from './calendar.service';
 import { IcalSyncService } from './ical-sync.service';
+import { CalendarNotesService, NoteDto } from './calendar-notes.service';
 import { HolidaysService } from './holidays.service';
 
 @UseGuards(JwtAuthGuard, ApprovedGuard)
@@ -24,6 +25,7 @@ export class CalendarController {
     private calendarService: CalendarService,
     private ical: IcalSyncService,
     private holidays: HolidaysService,
+    private notes: CalendarNotesService,
   ) {}
 
   @Get()
@@ -58,6 +60,27 @@ export class CalendarController {
   @Get('holidays')
   holidayList() {
     return this.holidays.list();
+  }
+
+  // Private notes on calendar days (orange on the calendar).
+  @Get('notes')
+  noteList(@CurrentUser() user: User) {
+    return this.notes.list(user);
+  }
+
+  @Post('notes')
+  noteAdd(@CurrentUser() user: User, @Body() body: NoteDto) {
+    return this.notes.add(user, body ?? {});
+  }
+
+  @Patch('notes/:id')
+  noteUpdate(@CurrentUser() user: User, @Param('id') id: string, @Body() body: NoteDto) {
+    return this.notes.update(user, id, body ?? {});
+  }
+
+  @Delete('notes/:id')
+  noteRemove(@CurrentUser() user: User, @Param('id') id: string) {
+    return this.notes.remove(user, id);
   }
 
   @Get('announcements')
