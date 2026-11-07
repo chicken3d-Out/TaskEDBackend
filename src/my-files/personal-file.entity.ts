@@ -23,6 +23,10 @@ export class PersonalFile {
   @Column({ type: 'varchar', length: 1500 })
   link: string;
 
+  // 'storage' = File Storage (by school year); 'working' = Working Directory Files (PDS, Service Record...)
+  @Column({ type: 'varchar', length: 20, default: 'storage' })
+  section: string;
+
   // e.g. "2025-2026" (shown as "S.Y. 2025-2026")
   @Column({ name: 'school_year' })
   schoolYear: string;

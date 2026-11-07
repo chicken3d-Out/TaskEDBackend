@@ -26,6 +26,7 @@ export class MyFilesService {
       id: f.id,
       label: f.label,
       category: f.category,
+      section: f.section,
       link: f.link,
       schoolYear: f.schoolYear,
       createdAt: f.createdAt,
@@ -38,7 +39,7 @@ export class MyFilesService {
     return { currentYear: schoolYearOf(), files: files.map((f) => this.view(f)) };
   }
 
-  async add(user: User, dto: { label?: string; category?: string; link?: string; schoolYear?: string }) {
+  async add(user: User, dto: { label?: string; category?: string; link?: string; schoolYear?: string; section?: string }) {
     this.assertAllowed(user);
     const label = (dto.label ?? '').trim().slice(0, 150);
     if (!label) throw new BadRequestException('A label is required');
@@ -46,6 +47,7 @@ export class MyFilesService {
       this.repo.create({
         owner: { id: user.id } as User,
         label,
+        section: dto.section === 'working' ? 'working' : 'storage',
         category: (dto.category ?? '').trim().slice(0, 60) || null,
         link: cleanLink(dto.link),
         schoolYear: dto.schoolYear ? validSchoolYear(dto.schoolYear) : schoolYearOf(),

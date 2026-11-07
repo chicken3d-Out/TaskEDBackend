@@ -17,6 +17,10 @@ import { SchoolPortalModule } from './school-portal/school-portal.module';
 import { MyFilesModule } from './my-files/my-files.module';
 import { PersonalEvent } from './calendar/personal-event.entity';
 import { CalendarNote } from './calendar/calendar-note.entity';
+import { HrProfile } from './hr-profile/hr-profile.entity';
+import { HrProfileModule } from './hr-profile/hr-profile.module';
+import { TeacherFile } from './teacher-files/teacher-file.entity';
+import { TeacherFilesModule } from './teacher-files/teacher-files.module';
 import { PersonalFile } from './my-files/personal-file.entity';
 import { User } from './users/user.entity';
 import { School } from './schools/school.entity';
@@ -62,6 +66,8 @@ import { SchoolFile } from './school-portal/school-file.entity';
           PersonalEvent,
           PersonalFile,
           CalendarNote,
+          HrProfile,
+          TeacherFile,
         ],
         // Fine for local dev; switch to migrations (npm run migration:run)
         // before this ever touches a real deployment.
@@ -81,6 +87,8 @@ import { SchoolFile } from './school-portal/school-file.entity';
     DashboardModule,
     SchoolPortalModule,
     MyFilesModule,
+    HrProfileModule,
+    TeacherFilesModule,
   ],
 })
 export class AppModule {}

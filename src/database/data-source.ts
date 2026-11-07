@@ -14,6 +14,8 @@ import { SchoolDocumentType } from '../school-portal/school-document-type.entity
 import { SchoolFile } from '../school-portal/school-file.entity';
 import { PersonalEvent } from '../calendar/personal-event.entity';
 import { CalendarNote } from '../calendar/calendar-note.entity';
+import { HrProfile } from '../hr-profile/hr-profile.entity';
+import { TeacherFile } from '../teacher-files/teacher-file.entity';
 import { PersonalFile } from '../my-files/personal-file.entity';
 
 export default new DataSource({
@@ -41,6 +43,8 @@ export default new DataSource({
     PersonalEvent,
     PersonalFile,
     CalendarNote,
+    HrProfile,
+    TeacherFile,
   ],
   migrations: ['src/database/migrations/*.ts'],
   synchronize: false,
