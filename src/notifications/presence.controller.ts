@@ -12,7 +12,8 @@ const POKE_TTL_MS = 10 * 60 * 1000;
 
 // "Active users": who is online right now, and a friendly poke.
 // Visibility rule (one place to change): Administrators see everyone and
-// are visible to everyone; everyone else sees only people who share a
+// are visible to everyone; Administrative Officers also see every other
+// Administrative Officer; everyone else sees only people who share a
 // school with them. Pokes are only allowed on visible, online users.
 @UseGuards(JwtAuthGuard, ApprovedGuard)
 @Controller('presence')
@@ -34,6 +35,8 @@ export class PresenceController {
 
   private canSee(me: User, other: User): boolean {
     if (me.role === Role.ADMINISTRATOR || other.role === Role.ADMINISTRATOR) return true;
+    // Administrative Officers can see each other across schools.
+    if (me.role === Role.ADMIN_OFFICER && other.role === Role.ADMIN_OFFICER) return true;
     const mine = this.schoolIds(me);
     for (const id of this.schoolIds(other)) if (mine.has(id)) return true;
     return false;
