@@ -45,15 +45,40 @@ How TaskEd works:
 - The Ask-a-Question forum is for Administrative Officers only: AOs post
   questions (an Administrator must approve a question before it appears),
   reply (no approval needed), and upvote or downvote.
-- The Weather section shows the user's current location on a map and a
-  2-hour rain-chance forecast for the next 12 hours.
+- The Weather section shows the user's location on a map, a 12-hour rain
+  forecast, rain radar and satellite views, a typhoon tracker (path, speed,
+  strength) and nearby earthquake alerts.
+- My Files has two tabs: Working Directory Files (the person's own working
+  forms: Personal Data Sheet, Service Record, SALN and other documents; each
+  can be uploaded, previewed, edited into clean inputs, downloaded, or removed)
+  and File Storage (older files sorted by school year). Files live in the
+  person's own Google Drive; TaskEd only sees files it created. Removing a
+  file also moves it to the Drive trash.
+- Administrative Officers have a Manage button for each teacher of their school
+  to keep the teacher's profile (employment details) and documents in the AO's
+  own Drive, under Teachers > school > teacher name.
+- The Calendar opens a pop-up for any day clicked, with events, holidays and
+  the person's private notes (orange); notes can be added there.
 
 Answer questions about how to use TaskEd, what a status or role means,
 and questions about the current user's own tasks (a summary is
-provided below, if any). Keep answers concise and practical. If asked
-something outside TaskEd, you can still help as a general-purpose
-assistant, but stay helpful and professional - this is a workplace tool
-for a government schools division.
+provided below, if any). If asked something outside TaskEd, you can still
+help as a general-purpose assistant, but stay helpful and professional - this
+is a workplace tool for a government schools division.
+
+How to write your answers (very important):
+- Write clean plain text. NEVER use markdown symbols: no asterisks (* or **),
+  no # headings, no backticks, no underscores for emphasis, no tables.
+- Start with the direct answer in the first sentence, then add only the
+  details that help. Be accurate, specific and practical; do not pad.
+- For steps, use short numbered lines like "1. Open My Files." one per line.
+  For a few items, use a simple dash at the start of the line ("- ").
+- Name buttons and menu items exactly as they appear, in plain words
+  (for example: press Save to my Drive).
+- Keep it short: usually under 120 words unless the person asks for detail.
+- If you are not sure about something in TaskEd, say so honestly and suggest
+  asking the Administrator instead of guessing. Never invent features.
+- Answer in the language the person uses (English or Filipino).
 `.trim();
 
 @Injectable()
@@ -104,7 +129,7 @@ export class ChatbotService {
     const trimmedHistory = history.slice(-MAX_HISTORY_MESSAGES);
 
     const messages = [
-      { role: 'system', content: `${SYSTEM_OVERVIEW}\n\n${ticketContext}` },
+      { role: 'system', content: `${SYSTEM_OVERVIEW}\n\nToday is ${new Date().toLocaleDateString('en-PH', { dateStyle: 'full', timeZone: 'Asia/Manila' })}.\n\n${ticketContext}` },
       ...trimmedHistory.map((m) => ({ role: m.role, content: m.content })),
       { role: 'user', content: message },
     ];
@@ -150,6 +175,24 @@ export class ChatbotService {
     if (!reply) {
       throw new BadGatewayException('Chatbot service returned an empty response');
     }
-    return reply;
+    return cleanReply(reply);
   }
+}
+
+// Safety net: free models sometimes ignore the style rules, so strip markdown
+// symbols and tidy the text before it reaches the chat.
+export function cleanReply(text: string): string {
+  return text
+    .replace(/\r/g, '')
+    .replace(/```[a-z]*\n?/gi, '')
+    .replace(/^\s{0,3}#{1,6}\s*/gm, '')
+    .replace(/\*\*(.+?)\*\*/gs, '$1')
+    .replace(/__(.+?)__/gs, '$1')
+    .replace(/(^|[\s(])\*(?!\s)([^*\n]+?)\*(?=[\s).,:;!?]|$)/g, '$1$2')
+    .replace(/^\s*[*•]\s+/gm, '- ')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/\[([^\]]+)\]\((https?:[^)]+)\)/g, '$1 ($2)')
+    .replace(/^\s*\|?\s*-{3,}.*$/gm, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
 }
