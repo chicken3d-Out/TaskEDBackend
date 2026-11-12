@@ -35,7 +35,10 @@ import { ForumVote } from './forum/forum-vote.entity';
 import { SchoolDocumentType } from './school-portal/school-document-type.entity';
 import { SchoolFile } from './school-portal/school-file.entity';
 
+import { HealthController } from './health.controller';
+
 @Module({
+  controllers: [HealthController],
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
     ScheduleModule.forRoot(),
