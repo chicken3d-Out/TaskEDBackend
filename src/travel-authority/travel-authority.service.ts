@@ -8,9 +8,12 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { NotificationType } from '../notifications/notification.entity';
 import { TaFormData, TaSignature, TaStatus, TravelAuthority } from './travel-authority.entity';
 import { TravelSignatory } from './travel-signatory.entity';
+import { StorageService } from '../storage/storage.service';
 
 const FIELDS: (keyof TaFormData)[] = ['name', 'position', 'station', 'purpose', 'host', 'dates', 'destination', 'fund', 'dateFrom', 'dateTo'];
-const SIGNERS = [Role.TEACHER, Role.SCHOOL_HEAD, Role.ADMIN_OFFICER, Role.PUBLISHER];
+const APPLICANTS = [Role.TEACHER, Role.SCHOOL_HEAD, Role.ADMIN_OFFICER, Role.PUBLISHER, Role.DS_SECRETARY];
+const SIGNERS = [...APPLICANTS, Role.DISTRICT_SUPERVISOR];
+const ISO = /^\d{4}-\d{2}-\d{2}$/;
 const MAX_SIG = 400_000;
 
 export interface Route {
@@ -31,6 +34,7 @@ export class TravelAuthorityService {
     @InjectRepository(User) private users: Repository<User>,
     @InjectRepository(TravelAttachment) private attachments: Repository<TravelAttachment>,
     private notifications: NotificationsService,
+    private storage: StorageService,
   ) {}
 
   // ---------- who can do what ----------
@@ -53,7 +57,7 @@ export class TravelAuthorityService {
 
   private async signatory(key: string) {
     const s = await this.sigs.findOne({ where: { key } });
-    return { user: s?.user ?? null, name: this.signerName(s?.user ?? null, s?.name) };
+    return { user: s?.user ?? null, name: this.signerName(s?.user ?? null, s?.name), signature: s?.signature ?? null };
   }
 
   // Who signs, for a requester.
@@ -69,10 +73,10 @@ export class TravelAuthorityService {
     const school = requester.school ?? requester.assignedSchools?.[0] ?? null;
     const head = requester.role === Role.SCHOOL_HEAD ? null : school ? await this.users.findOne({ where: { role: Role.SCHOOL_HEAD, status: AccountStatus.APPROVED, school: { id: school.id } } }) : null;
     const headPart = { name: this.signerName(head), userId: head?.id ?? null, note: head ? undefined : `${school?.name ?? 'Your school'} has no School Head account yet.` };
-    const long = outside || requester.role === Role.SCHOOL_HEAD;
+    const long = outside || requester.role === Role.SCHOOL_HEAD || requester.role === Role.DS_SECRETARY;
     if (!long) return { countersign: null, recommending: headPart, approving: dsPart, approvingByEmail: false };
     return {
-      countersign: outside && requester.role !== Role.SCHOOL_HEAD ? headPart : null,
+      countersign: outside && requester.role !== Role.SCHOOL_HEAD && requester.role !== Role.DS_SECRETARY ? headPart : null,
       recommending: dsPart,
       approving: { name: sds.name, userId: null, note: sds.name ? undefined : 'The Administrator has not set the Schools Division Superintendent yet.' },
       approvingByEmail: true,
@@ -102,6 +106,7 @@ export class TravelAuthorityService {
       emailedAt: t.emailedAt,
       recommendingName: t.recommendingName,
       approvingName: t.approvingName,
+      taNumber: t.taNumber,
       driveLink: mine(t.owner?.id) ? t.driveLink : null,
       rev: t.rev,
       driveRev: t.driveRev,
@@ -121,17 +126,31 @@ export class TravelAuthorityService {
     if (t.status === 'awaiting_countersign' && t.countersignUser?.id === me.id) return 'countersign';
     if (t.status === 'awaiting_recommending' && t.recommendingUser?.id === me.id) return 'recommending';
     if (t.status === 'awaiting_approving' && t.approvingUser?.id === me.id) return 'approving';
+    // the DS Secretary signs for the District Supervisor
+    if (me.role === Role.DS_SECRETARY) {
+      if (t.status === 'awaiting_recommending' && t.approvingByEmail) return 'recommending';
+      if (t.status === 'awaiting_approving' && !t.approvingByEmail) return 'approving';
+    }
     return null;
   }
 
   private involved(t: TravelAuthority, me: User) {
+    if (me.role === Role.DS_SECRETARY && !['draft', 'awaiting_requester', 'awaiting_countersign'].includes(t.status)) return true;
     return [t.owner?.id, t.requester?.id, t.countersignUser?.id, t.recommendingUser?.id, t.approvingUser?.id].includes(me.id);
   }
 
   async mine(me: User) {
     this.canUse(me);
     const rows = await this.repo.find({ where: [{ owner: { id: me.id } }, { requester: { id: me.id } }], order: { createdAt: 'DESC' } });
-    return rows.map((t) => this.view(t, me, false));
+    return this.withAttachments(rows.map((t) => this.view(t, me, false)));
+  }
+
+  // the log shows each card's attachments so they can be opened without leaving the page
+  private async withAttachments(views: any[]) {
+    if (!views.length) return views;
+    const rows = await this.attachments.find({ where: { travelAuthority: { id: In(views.map((v) => v.id)) } }, order: { createdAt: 'ASC' }, select: ['id', 'name', 'mime', 'size', 'url'], relations: ['travelAuthority'] });
+    for (const v of views) v.attachments = rows.filter((a) => a.travelAuthority?.id === v.id).map((a) => ({ id: a.id, name: a.name, mime: a.mime, size: a.size, url: a.url }));
+    return views;
   }
 
   async inbox(me: User) {
@@ -146,7 +165,12 @@ export class TravelAuthorityService {
       ],
       order: { updatedAt: 'DESC' },
     });
-    return rows.map((t) => this.view(t, me, false));
+    if (me.role === Role.DS_SECRETARY) {
+      const have = new Set(rows.map((r) => r.id));
+      const ds = await this.repo.find({ where: [{ status: 'awaiting_recommending', approvingByEmail: true }, { status: 'awaiting_approving', approvingByEmail: false }], order: { updatedAt: 'DESC' } });
+      for (const t of ds) if (!have.has(t.id)) rows.push(t);
+    }
+    return this.withAttachments(rows.map((t) => this.view(t, me, false)));
   }
 
   private async load(id: string): Promise<TravelAuthority> {
@@ -160,17 +184,22 @@ export class TravelAuthorityService {
     if (!this.involved(t, me)) throw new ForbiddenException('This Travel Authority is not yours');
     const v: any = this.view(t, me, true);
     v.attachments = await this.attachmentList(id);
+    // the DS Secretary signs with the District Supervisor's signature (set by the Administrator)
+    if (me.role === Role.DS_SECRETARY && (v.myTurn === 'recommending' || v.myTurn === 'approving')) v.signAs = (await this.signatory('district_supervisor')).signature;
     return v;
   }
 
   private attachmentList(id: string) {
-    return this.attachments.find({ where: { travelAuthority: { id } }, order: { createdAt: 'ASC' }, select: ['id', 'name', 'mime', 'size'] });
+    return this.attachments.find({ where: { travelAuthority: { id } }, order: { createdAt: 'ASC' }, select: ['id', 'name', 'mime', 'size', 'url'] });
   }
 
   // ---------- writing ----------
   private clean(d: Partial<TaFormData> | undefined): TaFormData {
     const o: any = {};
     for (const k of FIELDS) o[k] = String((d as any)?.[k] ?? '').trim().slice(0, k === 'purpose' || k === 'destination' || k === 'station' ? 500 : 200);
+    if (o.dateFrom && !ISO.test(o.dateFrom)) throw new BadRequestException('Check the start date');
+    if (o.dateTo && !ISO.test(o.dateTo)) throw new BadRequestException('Check the end date');
+    if (o.dateFrom && o.dateTo && o.dateTo < o.dateFrom) throw new BadRequestException('The end date cannot be before the start date');
     return o as TaFormData;
   }
 
@@ -187,6 +216,7 @@ export class TravelAuthorityService {
 
   async create(me: User, dto: { data?: Partial<TaFormData>; outside?: boolean; forTeacherId?: string }) {
     this.canUse(me);
+    if (!APPLICANTS.includes(me.role!)) throw new ForbiddenException('This account only signs Travel Authorities');
     const requester = dto.forTeacherId ? await this.teacherFor(me, dto.forTeacherId) : me;
     const t = this.repo.create({
       owner: { id: me.id } as User,
@@ -236,8 +266,17 @@ export class TravelAuthorityService {
     const x = Number(dto.x), y = Number(dto.y);
     if (!(x >= 0 && x <= 1 && y >= 0 && y <= 1)) throw new BadRequestException('Tap on the form where the signature goes');
     const me2 = await this.users.findOne({ where: { id: me.id }, select: ['id', 'signature'] });
-    if (!me2?.signature) throw new BadRequestException('Add your signature in My profile first');
-    const sig: TaSignature = { img: me2.signature, x, y, at: new Date().toISOString() };
+    let img = me2?.signature ?? null;
+    // the District Supervisor's step: the Secretary (and the DS, if none of their own) uses the signature the Administrator uploaded
+    const dsStep = (turn === 'recommending' && t.approvingByEmail) || (turn === 'approving' && !t.approvingByEmail);
+    if (dsStep && (me.role === Role.DS_SECRETARY || !img)) {
+      const ds = await this.signatory('district_supervisor');
+      if (me.role === Role.DS_SECRETARY) img = ds.signature;
+      else img = img ?? ds.signature;
+      if (!img) throw new BadRequestException('The District Supervisor’s signature has not been uploaded yet. Ask the Administrator (Users › Travel Authority signatories).');
+    }
+    if (!img) throw new BadRequestException('Add your signature in My profile first');
+    const sig: TaSignature = { img, x, y, at: new Date().toISOString() };
 
     if (turn === 'requester') {
       if (!t.data.name || !t.data.purpose || !t.data.destination) throw new BadRequestException('Fill in the name, purpose and destination first');
@@ -264,6 +303,11 @@ export class TravelAuthorityService {
   }
 
   private nextAfterRequester(t: TravelAuthority): TaStatus {
+    const dsIsNext = t.approvingByEmail && !(t.countersignUser && t.countersignUser.id !== t.requester.id);
+    if (dsIsNext) {
+      if (!t.recommendingName) throw new BadRequestException('The Administrator has not set the District Supervisor yet.');
+      return 'awaiting_recommending'; // the DS, or the DS Secretary on their behalf, signs
+    }
     if (t.countersignUser && t.countersignUser.id !== t.requester.id) return 'awaiting_countersign';
     if (t.countersignName && !t.countersignUser) throw new BadRequestException(`${t.countersignName || 'The School Head'} has no TaskEd account yet. Ask the Administrator.`);
     if (!t.recommendingUser) throw new BadRequestException(`${t.recommendingName || 'The recommending authority'} has no TaskEd account yet. Ask the Administrator to link one.`);
@@ -273,7 +317,14 @@ export class TravelAuthorityService {
   private async afterSign(t: TravelAuthority, signer: User) {
     const who = t.requester?.name ?? 'Someone';
     const next = t.status === 'awaiting_countersign' ? t.countersignUser : t.status === 'awaiting_recommending' ? t.recommendingUser : t.status === 'awaiting_approving' ? t.approvingUser : null;
-    if (next) await this.ping(next, `${who} has a Travel Authority waiting for your signature.`, t.id);
+    const dsNow = (t.status === 'awaiting_recommending' && t.approvingByEmail) || (t.status === 'awaiting_approving' && !t.approvingByEmail);
+    if (dsNow) {
+      const secs = await this.users.find({ where: { role: Role.DS_SECRETARY, status: AccountStatus.APPROVED } });
+      const to = new Map<string, User>();
+      if (next) to.set(next.id, next);
+      for (const u of secs) to.set(u.id, u);
+      for (const u of to.values()) await this.ping(u, `${who} has a Travel Authority waiting for the District Supervisor’s signature.`, t.id);
+    } else if (next) await this.ping(next, `${who} has a Travel Authority waiting for your signature.`, t.id);
     else if (t.status === 'awaiting_email') {
       await this.ping(t.owner, `${who}'s Travel Authority is signed. Open it and press “Send to Travel Authority” to email it for the Superintendent.`, t.id);
       if (t.requester.id !== t.owner.id) await this.ping(t.requester, 'Your Travel Authority is signed. It will be emailed for the Superintendent.', t.id);
@@ -325,27 +376,75 @@ export class TravelAuthorityService {
     if (t.status !== 'draft' && t.status !== 'awaiting_requester') throw new BadRequestException('It has already been signed.');
     return t;
   }
-  async addAttachment(me: User, id: string, dto: { name?: string; mime?: string; data?: string }) {
+  signUpload(me: User) {
+    this.canUse(me);
+    return this.storage.signTravel(me.id);
+  }
+
+  // The browser has already sent the file straight to Cloudinary; we keep its address.
+  async addAttachment(me: User, id: string, dto: { name?: string; mime?: string; size?: number; url?: string; publicId?: string }) {
     await this.editable(me, id);
     const name = String(dto.name ?? '').replace(/[\\/]+/g, ' ').trim().slice(0, 200);
-    if (!name || !dto.data) throw new BadRequestException('Choose a file');
-    const buf = Buffer.from(dto.data, 'base64');
-    if (!buf.length || buf.length > MAX_ATTACH_BYTES) throw new BadRequestException('Each attachment must be 4 MB or smaller');
+    const url = String(dto.url ?? '').trim();
+    if (!name || !url) throw new BadRequestException('Choose a file');
+    if (!this.storage.ownsUrl(url)) throw new BadRequestException('That file was not uploaded through TaskEd');
+    const size = Math.max(0, Math.min(Number(dto.size) || 0, MAX_ATTACH_BYTES));
+    if ((Number(dto.size) || 0) > MAX_ATTACH_BYTES) throw new BadRequestException('Each attachment must be 4 MB or smaller');
     if ((await this.attachments.count({ where: { travelAuthority: { id } } })) >= MAX_ATTACH) throw new BadRequestException(`At most ${MAX_ATTACH} attachments`);
-    await this.attachments.save(this.attachments.create({ travelAuthority: { id } as TravelAuthority, name, mime: String(dto.mime ?? 'application/octet-stream').slice(0, 100), size: buf.length, data: buf }));
+    await this.attachments.save(this.attachments.create({
+      travelAuthority: { id } as TravelAuthority, name, mime: String(dto.mime ?? 'application/octet-stream').slice(0, 100), size,
+      url: url.slice(0, 600), publicId: String(dto.publicId ?? '').slice(0, 300) || null,
+    }));
     return this.attachmentList(id);
   }
   async removeAttachment(me: User, id: string, aid: string) {
     await this.editable(me, id);
-    await this.attachments.delete({ id: aid, travelAuthority: { id } } as any);
+    const a = await this.attachments.findOne({ where: { id: aid, travelAuthority: { id } } as any });
+    if (a) {
+      if (a.publicId) void this.storage.destroy(a.publicId, a.url);
+      await this.attachments.delete({ id: aid });
+    }
     return this.attachmentList(id);
   }
+  // older attachments (saved before Cloudinary) still come back as base64
   async getAttachment(me: User, id: string, aid: string) {
     const t = await this.load(id);
     if (!this.involved(t, me)) throw new ForbiddenException('This Travel Authority is not yours');
     const a = await this.attachments.createQueryBuilder('a').addSelect('a.data').where('a.id = :aid AND a.travelAuthority = :id', { aid, id }).getOne();
     if (!a) throw new NotFoundException('Attachment not found');
-    return { name: a.name, mime: a.mime, data: a.data.toString('base64') };
+    return { name: a.name, mime: a.mime, url: a.url, data: a.data ? a.data.toString('base64') : null };
+  }
+
+  // ---------- TA number (DS Secretary) ----------
+  async numbering() {
+    const rows = await this.repo.find({ where: { status: 'approved' }, order: { updatedAt: 'DESC' } });
+    return rows.map((t) => ({
+      id: t.id, name: t.data?.name ?? '', destination: t.data?.destination ?? '', dates: t.data?.dates ?? '',
+      requesterName: t.requester?.name ?? '', taNumber: t.taNumber, taNumberedAt: t.taNumberedAt, approvedAt: t.sigApproving?.at ?? t.updatedAt,
+    }));
+  }
+
+  // level E (Elementary) or S (Secondary), the month, and the running number: E-11-205
+  async setNumber(me: User, id: string, dto: { level?: string; month?: number; seq?: number | string }) {
+    const t = await this.load(id);
+    if (t.status !== 'approved') throw new BadRequestException('Only a fully signed Travel Authority can be numbered');
+    const level = String(dto.level ?? '').toUpperCase();
+    const month = Math.trunc(Number(dto.month));
+    const seq = String(dto.seq ?? '').trim();
+    if (level !== 'E' && level !== 'S') throw new BadRequestException('Choose E (Elementary) or S (Secondary)');
+    if (!(month >= 1 && month <= 12)) throw new BadRequestException('The month must be 1 to 12');
+    if (!/^\d{1,6}$/.test(seq)) throw new BadRequestException('The last number must be digits only');
+    const number = `${level}-${month}-${Number(seq)}`;
+    const clash = await this.repo.findOne({ where: { taNumber: number } });
+    if (clash && clash.id !== t.id) throw new BadRequestException(`${number} is already used by ${clash.data?.name ?? 'another Travel Authority'}`);
+    t.taNumber = number;
+    t.taNumberedAt = new Date();
+    t.rev += 1; // the owner's Drive copy is rebuilt with the number
+    await this.repo.save(t);
+    await this.ping(t.requester, `Your Travel Authority is now numbered ${number}.`, t.id);
+    if (t.owner.id !== t.requester.id) await this.ping(t.owner, `${t.requester.name}'s Travel Authority is now numbered ${number}.`, t.id);
+    void me;
+    return { id: t.id, taNumber: number };
   }
 
   // ---------- signature (profile) ----------
@@ -368,18 +467,25 @@ export class TravelAuthorityService {
     const rows = await this.sigs.find();
     const pick = (key: string) => {
       const r = rows.find((x) => x.key === key);
-      return { userId: r?.user?.id ?? null, userName: r?.user?.name ?? '', email: r?.user?.depedEmail ?? '', name: r?.name ?? '' };
+      return { userId: r?.user?.id ?? null, userName: r?.user?.name ?? '', email: r?.user?.depedEmail ?? '', name: r?.name ?? '', signature: r?.signature ?? null };
     };
-    return { districtSupervisor: pick('district_supervisor'), sds: pick('sds') };
+    return { districtSupervisor: pick('district_supervisor'), sds: { ...pick('sds'), signature: null } };
   }
-  async setSettings(dto: { districtSupervisor?: { userId?: string | null; name?: string }; sds?: { userId?: string | null; name?: string } }) {
-    const save = async (key: string, v?: { userId?: string | null; name?: string }) => {
+  async setSettings(dto: { districtSupervisor?: { userId?: string | null; name?: string; signature?: string | null }; sds?: { userId?: string | null; name?: string } }) {
+    const save = async (key: string, v?: { userId?: string | null; name?: string; signature?: string | null }) => {
       if (!v) return;
       if (v.userId) {
         const u = await this.users.findOne({ where: { id: v.userId } });
-        if (!u || !u.role || !SIGNERS.includes(u.role)) throw new BadRequestException('Choose a Teacher, School Head, AO or Publisher account');
+        if (!u || !u.role || !SIGNERS.includes(u.role)) throw new BadRequestException('Choose a Teacher, School Head, AO, Publisher, District Supervisor or DS Secretary account');
       }
-      await this.sigs.save(this.sigs.create({ key, user: v.userId ? ({ id: v.userId } as User) : null, name: String(v.name ?? '').trim().slice(0, 150) }));
+      const row = (await this.sigs.findOne({ where: { key } })) ?? this.sigs.create({ key, signature: null });
+      row.user = v.userId ? ({ id: v.userId } as User) : null;
+      row.name = String(v.name ?? '').trim().slice(0, 150);
+      if (key === 'district_supervisor' && v.signature !== undefined) {
+        if (v.signature !== null && (!/^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(v.signature) || v.signature.length > MAX_SIG)) throw new BadRequestException('The signature must be a PNG image under 300 KB');
+        row.signature = v.signature;
+      }
+      await this.sigs.save(row);
     };
     await save('district_supervisor', dto.districtSupervisor);
     await save('sds', dto.sds);

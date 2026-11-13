@@ -88,6 +88,14 @@ export class TravelAuthority {
   @Column({ name: 'sig_approving', type: 'jsonb', nullable: true })
   sigApproving: TaSignature | null;
 
+  // Official number printed in the upper-right corner (e.g. E-11-205), added by the DS Secretary once approved
+  @Index('UQ_ta_number', { unique: true })
+  @Column({ name: 'ta_number', type: 'varchar', length: 30, nullable: true })
+  taNumber: string | null;
+
+  @Column({ name: 'ta_numbered_at', type: 'timestamptz', nullable: true })
+  taNumberedAt: Date | null;
+
   // bumps on every change; the owner's Drive copy is rebuilt when drive_rev < rev
   @Column({ default: 1 })
   rev: number;

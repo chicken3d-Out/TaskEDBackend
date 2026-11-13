@@ -87,4 +87,35 @@ export class StorageService {
       fields: { ...toSign, api_key: apiKey, signature },
     };
   }
+
+  // Travel Authority attachments (optional supporting documents): JPG, PNG or PDF.
+  signTravel(userId: string): SignedUpload {
+    const { cloudName, apiKey, apiSecret } = this.creds();
+    const toSign: Record<string, string> = {
+      allowed_formats: 'jpg,jpeg,png,pdf',
+      folder: `tasked/travel-authority/${userId}`,
+      timestamp: Math.floor(Date.now() / 1000).toString(),
+    };
+    const base = Object.keys(toSign).sort().map((k) => `${k}=${toSign[k]}`).join('&');
+    const signature = createHash('sha1').update(base + apiSecret).digest('hex');
+    return { uploadUrl: `https://api.cloudinary.com/v1_1/${cloudName}/auto/upload`, fields: { ...toSign, api_key: apiKey, signature } };
+  }
+
+  // Only accept file addresses that really are on our own Cloudinary account.
+  ownsUrl(url: string): boolean {
+    const cloudName = this.config.get<string>('CLOUDINARY_CLOUD_NAME');
+    return !!cloudName && url.startsWith(`https://res.cloudinary.com/${cloudName}/`);
+  }
+
+  // Best effort: remove an uploaded file from Cloudinary.
+  async destroy(publicId: string, url?: string | null): Promise<void> {
+    try {
+      const { cloudName, apiKey, apiSecret } = this.creds();
+      const type = url && /\/raw\/upload\//.test(url) ? 'raw' : url && /\/video\/upload\//.test(url) ? 'video' : 'image';
+      const timestamp = Math.floor(Date.now() / 1000).toString();
+      const signature = createHash('sha1').update(`public_id=${publicId}&timestamp=${timestamp}${apiSecret}`).digest('hex');
+      const form = new URLSearchParams({ public_id: publicId, timestamp, api_key: apiKey, signature });
+      await fetch(`https://api.cloudinary.com/v1_1/${cloudName}/${type}/destroy`, { method: 'POST', body: form });
+    } catch { /* leave it: a stray file is harmless */ }
+  }
 }

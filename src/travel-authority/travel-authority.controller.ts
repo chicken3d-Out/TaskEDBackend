@@ -27,6 +27,11 @@ export class TravelAuthorityController {
   @Get('settings') @UseGuards(RolesGuard) @Roles(Role.ADMINISTRATOR) settings() { return this.service.getSettings(); }
   @Put('settings') @UseGuards(RolesGuard) @Roles(Role.ADMINISTRATOR) saveSettings(@Body() b: any) { return this.service.setSettings(b ?? {}); }
 
+  @Post('upload-signature') uploadSignature(@CurrentUser() u: User) { return this.service.signUpload(u); }
+
+  @Get('numbering') @UseGuards(RolesGuard) @Roles(Role.DS_SECRETARY, Role.ADMINISTRATOR) numbering() { return this.service.numbering(); }
+  @Put(':id/number') @UseGuards(RolesGuard) @Roles(Role.DS_SECRETARY, Role.ADMINISTRATOR) setNumber(@CurrentUser() u: User, @Param('id') id: string, @Body() b: any) { return this.service.setNumber(u, id, b ?? {}); }
+
   @Post() create(@CurrentUser() u: User, @Body() b: any) { return this.service.create(u, b ?? {}); }
   @Get(':id') get(@CurrentUser() u: User, @Param('id') id: string) { return this.service.get(u, id); }
   @Patch(':id') update(@CurrentUser() u: User, @Param('id') id: string, @Body() b: any) { return this.service.update(u, id, b ?? {}); }

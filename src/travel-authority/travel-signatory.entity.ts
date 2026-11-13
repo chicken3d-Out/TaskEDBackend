@@ -15,4 +15,8 @@ export class TravelSignatory {
 
   @Column({ type: 'varchar', length: 150, default: '' })
   name: string;
+
+  // The District Supervisor's signature (PNG), uploaded by the Administrator, so the DS Secretary can sign for them.
+  @Column({ type: 'text', nullable: true })
+  signature: string | null;
 }

@@ -21,8 +21,16 @@ export class TravelAttachment {
   @Column({ type: 'int' })
   size: number;
 
-  @Column({ type: 'bytea', select: false })
-  data: Buffer;
+  // Stored in Cloudinary: where to open it, and its id there (so it can be removed)
+  @Column({ type: 'varchar', length: 600, nullable: true })
+  url: string | null;
+
+  @Column({ name: 'public_id', type: 'varchar', length: 300, nullable: true })
+  publicId: string | null;
+
+  // older attachments (before Cloudinary) kept their bytes here
+  @Column({ type: 'bytea', nullable: true, select: false })
+  data: Buffer | null;
 
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
