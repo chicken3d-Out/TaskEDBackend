@@ -1,8 +1,6 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { ConfigService } from '@nestjs/config';
 import { TravelAttachment } from './travel-attachment.entity';
-import { MailService } from './mail.service';
 import { In, Repository } from 'typeorm';
 import { User } from '../users/user.entity';
 import { AccountStatus, Role } from '../common/enums/role.enum';
@@ -24,7 +22,6 @@ export interface Route {
 
 const MAX_ATTACH = 5;
 const MAX_ATTACH_BYTES = 4 * 1024 * 1024;
-const MAX_DOCX_BYTES = 6 * 1024 * 1024;
 
 @Injectable()
 export class TravelAuthorityService {
@@ -34,8 +31,6 @@ export class TravelAuthorityService {
     @InjectRepository(User) private users: Repository<User>,
     @InjectRepository(TravelAttachment) private attachments: Repository<TravelAttachment>,
     private notifications: NotificationsService,
-    private mail: MailService,
-    private config: ConfigService,
   ) {}
 
   // ---------- who can do what ----------
@@ -146,6 +141,7 @@ export class TravelAuthorityService {
         { status: 'awaiting_countersign', countersignUser: { id: me.id } },
         { status: 'awaiting_recommending', recommendingUser: { id: me.id } },
         { status: 'awaiting_approving', approvingUser: { id: me.id } },
+        { status: 'awaiting_email', owner: { id: me.id } },
       ],
       order: { updatedAt: 'DESC' },
     });
@@ -231,7 +227,7 @@ export class TravelAuthorityService {
     return this.view(await this.load(id), me, true);
   }
 
-  async sign(me: User, id: string, dto: { x?: number; y?: number; docx?: string }) {
+  async sign(me: User, id: string, dto: { x?: number; y?: number }) {
     this.canUse(me);
     const t = await this.load(id);
     const turn = this.myTurn(t, me);
@@ -253,9 +249,8 @@ export class TravelAuthorityService {
     } else if (turn === 'recommending') {
       t.sigRecommending = sig;
       if (t.approvingByEmail) {
-        await this.emailSigned(t, dto.docx); // fails (and nothing is saved) if the email cannot be sent
-        t.status = 'emailed';
-        t.emailedAt = new Date();
+        // the District Supervisor was the last e-signature: now the applicant emails it for the Superintendent
+        t.status = 'awaiting_email';
       } else t.status = 'awaiting_approving';
     } else {
       t.sigApproving = sig;
@@ -274,55 +269,35 @@ export class TravelAuthorityService {
     return 'awaiting_recommending';
   }
 
-  // Outside the Division: after the District Supervisor signs, the e-signed form and the
-  // attachments are emailed to the Travel Authority mailbox for the Superintendent.
-  private async emailSigned(t: TravelAuthority, docxB64?: string) {
-    if (!docxB64) throw new BadRequestException('The signed form was not included. Reload and try again.');
-    const docx = Buffer.from(docxB64, 'base64');
-    if (docx.length < 4 || docx.length > MAX_DOCX_BYTES || docx[0] !== 0x50 || docx[1] !== 0x4b) throw new BadRequestException('The signed form could not be read.');
-    const files = await this.attachments.createQueryBuilder('a').addSelect('a.data').where('a.travelAuthority = :id', { id: t.id }).orderBy('a.createdAt', 'ASC').getMany();
-    const d = t.data;
-    const to = this.config.get<string>('TRAVEL_AUTHORITY_EMAIL') ?? 'travel.authority@deped.gov.ph';
-    const safe = (s: string) => s.replace(/[\\/:*?"<>|]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 60);
-    const text = [
-      'Good day.',
-      '',
-      'Please find the e-signed Travel Authority for the approval of the Schools Division Superintendent.',
-      '',
-      `Name: ${d.name}`,
-      `Position: ${d.position}`,
-      `Destination: ${d.destination}`,
-      `Inclusive dates: ${d.dates}`,
-      `Purpose: ${d.purpose}`,
-      `Host of activity: ${d.host}`,
-      `Fund source: ${d.fund}`,
-      '',
-      `E-signed by: ${t.requester.name} (requesting employee)${t.sigCountersign ? `, ${t.countersignName} (School Head, countersigned)` : ''}, ${t.recommendingName} (recommending authority).`,
-      `Approving authority: ${t.approvingName}`,
-      files.length ? `Attachments: ${files.map((f) => f.name).join(', ')}` : 'No attachments.',
-      '',
-      'Sent through TaskEd, Schools Division of Leyte.',
-    ].join('\n');
-    await this.mail.send(to, `Travel Authority - ${safe(d.name)} - ${safe(d.destination)}`, text, [
-      { filename: `Travel Authority - ${safe(d.name)}.docx`, content: docx },
-      ...files.map((f) => ({ filename: f.name, content: f.data })),
-    ]);
-  }
-
   private async afterSign(t: TravelAuthority, signer: User) {
     const who = t.requester?.name ?? 'Someone';
     const next = t.status === 'awaiting_countersign' ? t.countersignUser : t.status === 'awaiting_recommending' ? t.recommendingUser : t.status === 'awaiting_approving' ? t.approvingUser : null;
     if (next) await this.ping(next, `${who} has a Travel Authority waiting for your signature.`, t.id);
-    else if (t.status === 'approved' || t.status === 'emailed') {
-      const msg = t.status === 'emailed' ? 'Your Travel Authority is signed and was emailed to the Travel Authority mailbox for the Superintendent.' : 'Your Travel Authority is fully signed.';
-      await this.ping(t.requester, msg, t.id);
-      if (t.owner.id !== t.requester.id) await this.ping(t.owner, `${who}'s Travel Authority is signed.`, t.id);
+    else if (t.status === 'awaiting_email') {
+      await this.ping(t.owner, `${who}'s Travel Authority is signed. Open it and press “Send to Travel Authority” to email it for the Superintendent.`, t.id);
+      if (t.requester.id !== t.owner.id) await this.ping(t.requester, 'Your Travel Authority is signed. It will be emailed for the Superintendent.', t.id);
+    } else if (t.status === 'approved') {
+      await this.ping(t.requester, 'Your Travel Authority is fully signed.', t.id);
+      if (t.owner.id !== t.requester.id) await this.ping(t.owner, `${who}'s Travel Authority is fully signed.`, t.id);
     }
     void signer;
   }
 
   private async ping(user: User, message: string, id: string) {
     try { await this.notifications.create(user, NotificationType.TRAVEL_AUTHORITY, message, id); } catch { /* best effort */ }
+  }
+
+  // The applicant (the one who made it) emailed the signed form from their own DepEd mailbox.
+  async markEmailed(me: User, id: string) {
+    const t = await this.load(id);
+    if (t.owner?.id !== me.id) throw new ForbiddenException('Only the person who applied can send it');
+    if (t.status !== 'awaiting_email') throw new BadRequestException('It is not ready to be emailed');
+    t.status = 'emailed';
+    t.emailedAt = new Date();
+    t.rev += 1;
+    await this.repo.save(t);
+    if (t.requester.id !== me.id) await this.ping(t.requester, 'Your Travel Authority was emailed to the Travel Authority mailbox.', t.id);
+    return this.view(await this.load(id), me, true);
   }
 
   async setDrive(me: User, id: string, dto: { link?: string; rev?: number }) {
