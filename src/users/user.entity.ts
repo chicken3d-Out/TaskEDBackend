@@ -39,6 +39,11 @@ export class User {
   @Column({ name: 'calendar_ical_url', type: 'text', nullable: true, select: false })
   calendarIcalUrl?: string | null;
 
+  // The person's drawn or imported signature (PNG data URL), used to sign Travel
+  // Authorities. Never selected unless asked for; only the owner can read it.
+  @Column({ name: 'signature', type: 'text', nullable: true, select: false })
+  signature?: string | null;
+
   @Column({ name: 'calendar_linked', default: false })
   calendarLinked: boolean;
 
@@ -135,7 +140,7 @@ export class User {
 
   // Getters aren't serialized by default; the frontend routes on this flag.
   toJSON() {
-    const { passwordHash: _omit, calendarIcalUrl: _omit2, ...rest } = this as any;
+    const { passwordHash: _omit, calendarIcalUrl: _omit2, signature: _omit3, ...rest } = this as any;
     return {
       ...rest,
       profileComplete: this.registrationComplete,

@@ -21,6 +21,9 @@ import { HrProfile } from './hr-profile/hr-profile.entity';
 import { HrProfileModule } from './hr-profile/hr-profile.module';
 import { TeacherFile } from './teacher-files/teacher-file.entity';
 import { TeacherFilesModule } from './teacher-files/teacher-files.module';
+import { TravelAuthority } from './travel-authority/travel-authority.entity';
+import { TravelSignatory } from './travel-authority/travel-signatory.entity';
+import { TravelAuthorityModule } from './travel-authority/travel-authority.module';
 import { PersonalFile } from './my-files/personal-file.entity';
 import { User } from './users/user.entity';
 import { School } from './schools/school.entity';
@@ -71,6 +74,8 @@ import { HealthController } from './health.controller';
           CalendarNote,
           HrProfile,
           TeacherFile,
+          TravelAuthority,
+          TravelSignatory,
         ],
         // Fine for local dev; switch to migrations (npm run migration:run)
         // before this ever touches a real deployment.
@@ -90,6 +95,7 @@ import { HealthController } from './health.controller';
     DashboardModule,
     SchoolPortalModule,
     MyFilesModule,
+    TravelAuthorityModule,
     HrProfileModule,
     TeacherFilesModule,
   ],

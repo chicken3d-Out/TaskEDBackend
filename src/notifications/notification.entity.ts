@@ -16,6 +16,7 @@ export enum NotificationType {
   ACCOUNT_REJECTED = 'account_rejected',
   CALENDAR_REMINDER = 'calendar_reminder',
   FORUM_REVIEW = 'forum_review',
+  TRAVEL_AUTHORITY = 'travel_authority',
 }
 
 @Entity('notifications')
