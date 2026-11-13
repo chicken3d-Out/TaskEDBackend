@@ -44,9 +44,19 @@ export class WeatherService {
   private readonly baseUrl = 'https://api.open-meteo.com/v1/forecast';
 
   private async getJson(url: string, headers: Record<string, string> = {}): Promise<any> {
-    const res = await fetch(url, { headers, signal: AbortSignal.timeout(10000) });
-    if (!res.ok) throw new Error(`Upstream returned ${res.status}`);
-    return res.json();
+    // the free weather service sometimes refuses or times out: try up to three times
+    let last: unknown;
+    for (let i = 0; i < 3; i++) {
+      try {
+        const res = await fetch(url, { headers, signal: AbortSignal.timeout(8000) });
+        if (!res.ok) throw new Error(`Upstream returned ${res.status}`);
+        return await res.json();
+      } catch (e) {
+        last = e;
+        await new Promise((r) => setTimeout(r, 700 * (i + 1)));
+      }
+    }
+    throw last;
   }
 
   // Best-effort town name for the coordinates (never fails the forecast).
