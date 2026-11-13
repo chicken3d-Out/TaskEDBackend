@@ -65,7 +65,8 @@ export class TravelAuthorityService {
     const ds = await this.signatory('district_supervisor');
     const sds = await this.signatory('sds');
     const dsPart = { name: ds.name, userId: ds.user?.id ?? null, note: !ds.name ? 'The Administrator has not set the District Supervisor yet.' : !ds.user ? 'No TaskEd account is linked to the District Supervisor, so they cannot sign here.' : undefined };
-    const school = requester.school;
+    // an AO's school may be recorded as the school they are assigned to
+    const school = requester.school ?? requester.assignedSchools?.[0] ?? null;
     const head = requester.role === Role.SCHOOL_HEAD ? null : school ? await this.users.findOne({ where: { role: Role.SCHOOL_HEAD, status: AccountStatus.APPROVED, school: { id: school.id } } }) : null;
     const headPart = { name: this.signerName(head), userId: head?.id ?? null, note: head ? undefined : `${school?.name ?? 'Your school'} has no School Head account yet.` };
     const long = outside || requester.role === Role.SCHOOL_HEAD;
