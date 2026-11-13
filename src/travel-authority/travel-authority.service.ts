@@ -11,8 +11,8 @@ import { TravelSignatory } from './travel-signatory.entity';
 import { StorageService } from '../storage/storage.service';
 
 const FIELDS: (keyof TaFormData)[] = ['name', 'position', 'station', 'purpose', 'host', 'dates', 'destination', 'fund', 'dateFrom', 'dateTo'];
-const APPLICANTS = [Role.TEACHER, Role.SCHOOL_HEAD, Role.ADMIN_OFFICER, Role.PUBLISHER, Role.DS_SECRETARY];
-const SIGNERS = [...APPLICANTS, Role.DISTRICT_SUPERVISOR];
+const APPLICANTS = [Role.TEACHER, Role.SCHOOL_HEAD, Role.ADMIN_OFFICER, Role.PUBLISHER, Role.DS_SECRETARY, Role.DISTRICT_SUPERVISOR];
+const SIGNERS = APPLICANTS;
 const ISO = /^\d{4}-\d{2}-\d{2}$/;
 const MAX_SIG = 400_000;
 
@@ -73,14 +73,26 @@ export class TravelAuthorityService {
     const school = requester.school ?? requester.assignedSchools?.[0] ?? null;
     const head = requester.role === Role.SCHOOL_HEAD ? null : school ? await this.users.findOne({ where: { role: Role.SCHOOL_HEAD, status: AccountStatus.APPROVED, school: { id: school.id } } }) : null;
     const headPart = { name: this.signerName(head), userId: head?.id ?? null, note: head ? undefined : `${school?.name ?? 'Your school'} has no School Head account yet.` };
-    const long = outside || requester.role === Role.SCHOOL_HEAD || requester.role === Role.DS_SECRETARY;
-    if (!long) return { countersign: null, recommending: headPart, approving: dsPart, approvingByEmail: false };
-    return {
-      countersign: outside && requester.role !== Role.SCHOOL_HEAD && requester.role !== Role.DS_SECRETARY ? headPart : null,
-      recommending: dsPart,
-      approving: { name: sds.name, userId: null, note: sds.name ? undefined : 'The Administrator has not set the Schools Division Superintendent yet.' },
-      approvingByEmail: true,
-    };
+    const sdsPart = { name: sds.name, userId: null, note: sds.name ? undefined : 'The Administrator has not set the Schools Division Superintendent yet.' };
+    const printed = async (key: string, label: string) => { const x = await this.signatory(key); return { name: x.name, userId: null, note: x.name ? undefined : `The Administrator has not set the ${label} yet.` }; };
+
+    // A District Supervisor: no School Head. These are not e-signed here - after the DS signs, the applicant emails it.
+    if (requester.role === Role.DISTRICT_SUPERVISOR) {
+      return outside
+        ? { countersign: null, recommending: await printed('asds', 'Assistant Schools Division Superintendent'), approving: sdsPart, approvingByEmail: true }
+        : { countersign: null, recommending: await printed('cid_chief', 'CID Chief'), approving: await printed('asds', 'Assistant Schools Division Superintendent'), approvingByEmail: true };
+    }
+    // A School Head: no recommending within the Division (the District Supervisor approves); outside, the District
+    // Supervisor recommends and the Superintendent approves by email.
+    if (requester.role === Role.SCHOOL_HEAD) {
+      return outside
+        ? { countersign: null, recommending: dsPart, approving: sdsPart, approvingByEmail: true }
+        : { countersign: null, recommending: null, approving: dsPart, approvingByEmail: false };
+    }
+    // Teacher / AO / Publisher / DS Secretary: their School Head recommends, the District Supervisor approves.
+    // Outside the Division the School Head countersigns first, the District Supervisor recommends, the Superintendent approves by email.
+    if (!outside) return { countersign: null, recommending: headPart, approving: dsPart, approvingByEmail: false };
+    return { countersign: headPart, recommending: dsPart, approving: sdsPart, approvingByEmail: true };
   }
 
   async routeFor(me: User, outside: boolean, requesterId?: string) {
@@ -303,6 +315,10 @@ export class TravelAuthorityService {
   }
 
   private nextAfterRequester(t: TravelAuthority): TaStatus {
+    // a District Supervisor signs only as the applicant; the rest goes by email
+    if (t.requester.role === Role.DISTRICT_SUPERVISOR) return 'awaiting_email';
+    // a School Head within the Division: no recommending, the District Supervisor approves
+    if (!t.recommendingName && !t.approvingByEmail) return 'awaiting_approving';
     const dsIsNext = t.approvingByEmail && !(t.countersignUser && t.countersignUser.id !== t.requester.id);
     if (dsIsNext) {
       if (!t.recommendingName) throw new BadRequestException('The Administrator has not set the District Supervisor yet.');
@@ -469,9 +485,9 @@ export class TravelAuthorityService {
       const r = rows.find((x) => x.key === key);
       return { userId: r?.user?.id ?? null, userName: r?.user?.name ?? '', email: r?.user?.depedEmail ?? '', name: r?.name ?? '', signature: r?.signature ?? null };
     };
-    return { districtSupervisor: pick('district_supervisor'), sds: { ...pick('sds'), signature: null } };
+    return { districtSupervisor: pick('district_supervisor'), sds: { ...pick('sds'), signature: null }, cidChief: { ...pick('cid_chief'), signature: null }, asds: { ...pick('asds'), signature: null } };
   }
-  async setSettings(dto: { districtSupervisor?: { userId?: string | null; name?: string; signature?: string | null }; sds?: { userId?: string | null; name?: string } }) {
+  async setSettings(dto: { districtSupervisor?: { userId?: string | null; name?: string; signature?: string | null }; sds?: { userId?: string | null; name?: string }; cidChief?: { name?: string }; asds?: { name?: string } }) {
     const save = async (key: string, v?: { userId?: string | null; name?: string; signature?: string | null }) => {
       if (!v) return;
       if (v.userId) {
@@ -489,6 +505,8 @@ export class TravelAuthorityService {
     };
     await save('district_supervisor', dto.districtSupervisor);
     await save('sds', dto.sds);
+    await save('cid_chief', dto.cidChief);
+    await save('asds', dto.asds);
     return this.getSettings();
   }
 }
