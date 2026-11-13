@@ -1,5 +1,8 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import { ConfigService } from '@nestjs/config';
+import { TravelAttachment } from './travel-attachment.entity';
+import { MailService } from './mail.service';
 import { In, Repository } from 'typeorm';
 import { User } from '../users/user.entity';
 import { AccountStatus, Role } from '../common/enums/role.enum';
@@ -13,9 +16,15 @@ const SIGNERS = [Role.TEACHER, Role.SCHOOL_HEAD, Role.ADMIN_OFFICER, Role.PUBLIS
 const MAX_SIG = 400_000;
 
 export interface Route {
+  countersign: { name: string; userId: string | null; note?: string } | null;
   recommending: { name: string; userId: string | null; note?: string } | null;
   approving: { name: string; userId: string | null; note?: string };
+  approvingByEmail: boolean; // the approving authority does not e-sign: the signed form is emailed
 }
+
+const MAX_ATTACH = 5;
+const MAX_ATTACH_BYTES = 4 * 1024 * 1024;
+const MAX_DOCX_BYTES = 6 * 1024 * 1024;
 
 @Injectable()
 export class TravelAuthorityService {
@@ -23,7 +32,10 @@ export class TravelAuthorityService {
     @InjectRepository(TravelAuthority) private repo: Repository<TravelAuthority>,
     @InjectRepository(TravelSignatory) private sigs: Repository<TravelSignatory>,
     @InjectRepository(User) private users: Repository<User>,
+    @InjectRepository(TravelAttachment) private attachments: Repository<TravelAttachment>,
     private notifications: NotificationsService,
+    private mail: MailService,
+    private config: ConfigService,
   ) {}
 
   // ---------- who can do what ----------
@@ -49,19 +61,25 @@ export class TravelAuthorityService {
     return { user: s?.user ?? null, name: this.signerName(s?.user ?? null, s?.name) };
   }
 
-  // Recommending and approving authorities for a requester.
+  // Who signs, for a requester.
+  //  Within the Division (Teacher / AO / Publisher): School Head recommends, District Supervisor approves.
+  //  Outside the Division (or a School Head applying): the District Supervisor recommends - after the
+  //  School Head has countersigned, if the applicant is not the School Head - and the Schools Division
+  //  Superintendent approves by email, not by e-signature.
   async route(requester: User, outside: boolean): Promise<Route> {
     const ds = await this.signatory('district_supervisor');
     const sds = await this.signatory('sds');
-    const note = (s: { user: User | null; name: string }, label: string) => (!s.name ? `The Administrator has not set the ${label} yet.` : !s.user ? `No TaskEd account is linked to the ${label}, so they cannot sign here.` : undefined);
-    const ds2 = { name: ds.name, userId: ds.user?.id ?? null, note: note(ds, 'District Supervisor') };
-    const sds2 = { name: sds.name, userId: sds.user?.id ?? null, note: note(sds, 'Schools Division Superintendent') };
-    if (outside || requester.role === Role.SCHOOL_HEAD) return { recommending: ds2, approving: sds2 };
+    const dsPart = { name: ds.name, userId: ds.user?.id ?? null, note: !ds.name ? 'The Administrator has not set the District Supervisor yet.' : !ds.user ? 'No TaskEd account is linked to the District Supervisor, so they cannot sign here.' : undefined };
     const school = requester.school;
-    const head = school ? await this.users.findOne({ where: { role: Role.SCHOOL_HEAD, status: AccountStatus.APPROVED, school: { id: school.id } } }) : null;
+    const head = requester.role === Role.SCHOOL_HEAD ? null : school ? await this.users.findOne({ where: { role: Role.SCHOOL_HEAD, status: AccountStatus.APPROVED, school: { id: school.id } } }) : null;
+    const headPart = { name: this.signerName(head), userId: head?.id ?? null, note: head ? undefined : `${school?.name ?? 'Your school'} has no School Head account yet.` };
+    const long = outside || requester.role === Role.SCHOOL_HEAD;
+    if (!long) return { countersign: null, recommending: headPart, approving: dsPart, approvingByEmail: false };
     return {
-      recommending: { name: this.signerName(head), userId: head?.id ?? null, note: head ? undefined : `${school?.name ?? 'Your school'} has no School Head account yet.` },
-      approving: ds2,
+      countersign: outside && requester.role !== Role.SCHOOL_HEAD ? headPart : null,
+      recommending: dsPart,
+      approving: { name: sds.name, userId: null, note: sds.name ? undefined : 'The Administrator has not set the Schools Division Superintendent yet.' },
+      approvingByEmail: true,
     };
   }
 
@@ -83,6 +101,9 @@ export class TravelAuthorityService {
       ownerName: t.owner?.name,
       requesterId: t.requester?.id,
       requesterName: t.requester?.name,
+      countersignName: t.countersignName,
+      approvingByEmail: t.approvingByEmail,
+      emailedAt: t.emailedAt,
       recommendingName: t.recommendingName,
       approvingName: t.approvingName,
       driveLink: mine(t.owner?.id) ? t.driveLink : null,
@@ -91,23 +112,24 @@ export class TravelAuthorityService {
       needsDriveSync: mine(t.owner?.id) && t.driveRev < t.rev,
       myTurn: this.myTurn(t, me),
       isOwner: mine(t.owner?.id),
-      signed: { requester: !!t.sigRequester, recommending: !!t.sigRecommending, approving: !!t.sigApproving },
-      sigs: withSigs ? { requester: t.sigRequester, recommending: t.sigRecommending, approving: t.sigApproving } : undefined,
+      signed: { requester: !!t.sigRequester, countersign: !!t.sigCountersign, recommending: !!t.sigRecommending, approving: !!t.sigApproving },
+      sigs: withSigs ? { requester: t.sigRequester, countersign: t.sigCountersign, recommending: t.sigRecommending, approving: t.sigApproving } : undefined,
       createdAt: t.createdAt,
       updatedAt: t.updatedAt,
     };
   }
 
-  private myTurn(t: TravelAuthority, me: User): 'requester' | 'recommending' | 'approving' | null {
+  private myTurn(t: TravelAuthority, me: User): 'requester' | 'countersign' | 'recommending' | 'approving' | null {
     if (t.status === 'draft' && t.owner?.id === me.id && t.requester?.id === me.id) return 'requester';
     if (t.status === 'awaiting_requester' && t.requester?.id === me.id) return 'requester';
+    if (t.status === 'awaiting_countersign' && t.countersignUser?.id === me.id) return 'countersign';
     if (t.status === 'awaiting_recommending' && t.recommendingUser?.id === me.id) return 'recommending';
     if (t.status === 'awaiting_approving' && t.approvingUser?.id === me.id) return 'approving';
     return null;
   }
 
   private involved(t: TravelAuthority, me: User) {
-    return [t.owner?.id, t.requester?.id, t.recommendingUser?.id, t.approvingUser?.id].includes(me.id);
+    return [t.owner?.id, t.requester?.id, t.countersignUser?.id, t.recommendingUser?.id, t.approvingUser?.id].includes(me.id);
   }
 
   async mine(me: User) {
@@ -121,6 +143,7 @@ export class TravelAuthorityService {
     const rows = await this.repo.find({
       where: [
         { status: 'awaiting_requester', requester: { id: me.id } },
+        { status: 'awaiting_countersign', countersignUser: { id: me.id } },
         { status: 'awaiting_recommending', recommendingUser: { id: me.id } },
         { status: 'awaiting_approving', approvingUser: { id: me.id } },
       ],
@@ -138,7 +161,13 @@ export class TravelAuthorityService {
   async get(me: User, id: string) {
     const t = await this.load(id);
     if (!this.involved(t, me)) throw new ForbiddenException('This Travel Authority is not yours');
-    return this.view(t, me, true);
+    const v: any = this.view(t, me, true);
+    v.attachments = await this.attachmentList(id);
+    return v;
+  }
+
+  private attachmentList(id: string) {
+    return this.attachments.find({ where: { travelAuthority: { id } }, order: { createdAt: 'ASC' }, select: ['id', 'name', 'mime', 'size'] });
   }
 
   // ---------- writing ----------
@@ -150,6 +179,9 @@ export class TravelAuthorityService {
 
   private async applyRoute(t: TravelAuthority) {
     const r = await this.route(t.requester, t.outside);
+    t.countersignUser = r.countersign?.userId ? ({ id: r.countersign.userId } as User) : null;
+    t.countersignName = r.countersign?.name ?? '';
+    t.approvingByEmail = r.approvingByEmail;
     t.recommendingUser = r.recommending?.userId ? ({ id: r.recommending.userId } as User) : null;
     t.recommendingName = r.recommending?.name ?? '';
     t.approvingUser = r.approving.userId ? ({ id: r.approving.userId } as User) : null;
@@ -199,7 +231,7 @@ export class TravelAuthorityService {
     return this.view(await this.load(id), me, true);
   }
 
-  async sign(me: User, id: string, dto: { x?: number; y?: number }) {
+  async sign(me: User, id: string, dto: { x?: number; y?: number; docx?: string }) {
     this.canUse(me);
     const t = await this.load(id);
     const turn = this.myTurn(t, me);
@@ -215,9 +247,16 @@ export class TravelAuthorityService {
       await this.applyRoute(t); // names may have changed since the draft
       t.sigRequester = sig;
       t.status = this.nextAfterRequester(t);
+    } else if (turn === 'countersign') {
+      t.sigCountersign = sig;
+      t.status = 'awaiting_recommending';
     } else if (turn === 'recommending') {
       t.sigRecommending = sig;
-      t.status = 'awaiting_approving';
+      if (t.approvingByEmail) {
+        await this.emailSigned(t, dto.docx); // fails (and nothing is saved) if the email cannot be sent
+        t.status = 'emailed';
+        t.emailedAt = new Date();
+      } else t.status = 'awaiting_approving';
     } else {
       t.sigApproving = sig;
       t.status = 'approved';
@@ -229,22 +268,57 @@ export class TravelAuthorityService {
   }
 
   private nextAfterRequester(t: TravelAuthority): TaStatus {
-    if (!t.recommendingUser || t.recommendingUser.id === t.requester.id) {
-      if (!t.approvingUser) throw new BadRequestException(`${t.approvingName || 'The approving authority'} has no TaskEd account yet. Ask the Administrator to link one.`);
-      return 'awaiting_approving';
-    }
+    if (t.countersignUser && t.countersignUser.id !== t.requester.id) return 'awaiting_countersign';
+    if (t.countersignName && !t.countersignUser) throw new BadRequestException(`${t.countersignName || 'The School Head'} has no TaskEd account yet. Ask the Administrator.`);
+    if (!t.recommendingUser) throw new BadRequestException(`${t.recommendingName || 'The recommending authority'} has no TaskEd account yet. Ask the Administrator to link one.`);
     return 'awaiting_recommending';
+  }
+
+  // Outside the Division: after the District Supervisor signs, the e-signed form and the
+  // attachments are emailed to the Travel Authority mailbox for the Superintendent.
+  private async emailSigned(t: TravelAuthority, docxB64?: string) {
+    if (!docxB64) throw new BadRequestException('The signed form was not included. Reload and try again.');
+    const docx = Buffer.from(docxB64, 'base64');
+    if (docx.length < 4 || docx.length > MAX_DOCX_BYTES || docx[0] !== 0x50 || docx[1] !== 0x4b) throw new BadRequestException('The signed form could not be read.');
+    const files = await this.attachments.createQueryBuilder('a').addSelect('a.data').where('a.travelAuthority = :id', { id: t.id }).orderBy('a.createdAt', 'ASC').getMany();
+    const d = t.data;
+    const to = this.config.get<string>('TRAVEL_AUTHORITY_EMAIL') ?? 'travel.authority@deped.gov.ph';
+    const safe = (s: string) => s.replace(/[\\/:*?"<>|]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 60);
+    const text = [
+      'Good day.',
+      '',
+      'Please find the e-signed Travel Authority for the approval of the Schools Division Superintendent.',
+      '',
+      `Name: ${d.name}`,
+      `Position: ${d.position}`,
+      `Destination: ${d.destination}`,
+      `Inclusive dates: ${d.dates}`,
+      `Purpose: ${d.purpose}`,
+      `Host of activity: ${d.host}`,
+      `Fund source: ${d.fund}`,
+      '',
+      `E-signed by: ${t.requester.name} (requesting employee)${t.sigCountersign ? `, ${t.countersignName} (School Head, countersigned)` : ''}, ${t.recommendingName} (recommending authority).`,
+      `Approving authority: ${t.approvingName}`,
+      files.length ? `Attachments: ${files.map((f) => f.name).join(', ')}` : 'No attachments.',
+      '',
+      'Sent through TaskEd, Schools Division of Leyte.',
+    ].join('\n');
+    await this.mail.send(to, `Travel Authority - ${safe(d.name)} - ${safe(d.destination)}`, text, [
+      { filename: `Travel Authority - ${safe(d.name)}.docx`, content: docx },
+      ...files.map((f) => ({ filename: f.name, content: f.data })),
+    ]);
   }
 
   private async afterSign(t: TravelAuthority, signer: User) {
     const who = t.requester?.name ?? 'Someone';
-    if (t.status === 'awaiting_recommending' && t.recommendingUser) await this.ping(t.recommendingUser, `${who} has a Travel Authority waiting for your signature.`, t.id);
-    else if (t.status === 'awaiting_approving' && t.approvingUser) await this.ping(t.approvingUser, `${who} has a Travel Authority waiting for your signature.`, t.id);
-    else if (t.status === 'approved') {
-      await this.ping(t.requester, `Your Travel Authority is fully signed.`, t.id);
-      if (t.owner.id !== t.requester.id) await this.ping(t.owner, `${who}'s Travel Authority is fully signed.`, t.id);
+    const next = t.status === 'awaiting_countersign' ? t.countersignUser : t.status === 'awaiting_recommending' ? t.recommendingUser : t.status === 'awaiting_approving' ? t.approvingUser : null;
+    if (next) await this.ping(next, `${who} has a Travel Authority waiting for your signature.`, t.id);
+    else if (t.status === 'approved' || t.status === 'emailed') {
+      const msg = t.status === 'emailed' ? 'Your Travel Authority is signed and was emailed to the Travel Authority mailbox for the Superintendent.' : 'Your Travel Authority is fully signed.';
+      await this.ping(t.requester, msg, t.id);
+      if (t.owner.id !== t.requester.id) await this.ping(t.owner, `${who}'s Travel Authority is signed.`, t.id);
     }
-    if (t.status === 'awaiting_approving' && t.owner.id !== signer.id) { /* owner sees the new status in the log */ }
+    void signer;
   }
 
   private async ping(user: User, message: string, id: string) {
@@ -266,6 +340,36 @@ export class TravelAuthorityService {
     if (t.owner?.id !== me.id) throw new ForbiddenException('Only the person who made it can delete it');
     await this.repo.remove(t);
     return { ok: true };
+  }
+
+  // ---------- attachments (optional) ----------
+  private async editable(me: User, id: string) {
+    const t = await this.load(id);
+    if (t.owner?.id !== me.id) throw new ForbiddenException('Only the person who made it can change the attachments');
+    if (t.status !== 'draft' && t.status !== 'awaiting_requester') throw new BadRequestException('It has already been signed.');
+    return t;
+  }
+  async addAttachment(me: User, id: string, dto: { name?: string; mime?: string; data?: string }) {
+    await this.editable(me, id);
+    const name = String(dto.name ?? '').replace(/[\\/]+/g, ' ').trim().slice(0, 200);
+    if (!name || !dto.data) throw new BadRequestException('Choose a file');
+    const buf = Buffer.from(dto.data, 'base64');
+    if (!buf.length || buf.length > MAX_ATTACH_BYTES) throw new BadRequestException('Each attachment must be 4 MB or smaller');
+    if ((await this.attachments.count({ where: { travelAuthority: { id } } })) >= MAX_ATTACH) throw new BadRequestException(`At most ${MAX_ATTACH} attachments`);
+    await this.attachments.save(this.attachments.create({ travelAuthority: { id } as TravelAuthority, name, mime: String(dto.mime ?? 'application/octet-stream').slice(0, 100), size: buf.length, data: buf }));
+    return this.attachmentList(id);
+  }
+  async removeAttachment(me: User, id: string, aid: string) {
+    await this.editable(me, id);
+    await this.attachments.delete({ id: aid, travelAuthority: { id } } as any);
+    return this.attachmentList(id);
+  }
+  async getAttachment(me: User, id: string, aid: string) {
+    const t = await this.load(id);
+    if (!this.involved(t, me)) throw new ForbiddenException('This Travel Authority is not yours');
+    const a = await this.attachments.createQueryBuilder('a').addSelect('a.data').where('a.id = :aid AND a.travelAuthority = :id', { aid, id }).getOne();
+    if (!a) throw new NotFoundException('Attachment not found');
+    return { name: a.name, mime: a.mime, data: a.data.toString('base64') };
   }
 
   // ---------- signature (profile) ----------

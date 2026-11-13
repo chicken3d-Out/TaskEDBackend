@@ -1,7 +1,7 @@
 import { Column, CreateDateColumn, Entity, Index, JoinColumn, ManyToOne, PrimaryGeneratedColumn, UpdateDateColumn } from 'typeorm';
 import { User } from '../users/user.entity';
 
-export type TaStatus = 'draft' | 'awaiting_requester' | 'awaiting_recommending' | 'awaiting_approving' | 'approved';
+export type TaStatus = 'draft' | 'awaiting_requester' | 'awaiting_countersign' | 'awaiting_recommending' | 'awaiting_approving' | 'awaiting_email' | 'approved' | 'emailed';
 
 export interface TaSignature {
   img: string; // PNG data URL, a snapshot of the signer's signature at signing time
@@ -45,6 +45,25 @@ export class TravelAuthority {
 
   @Column({ type: 'varchar', length: 30, default: 'draft' })
   status: TaStatus;
+
+  // Outside the Division: the School Head countersigns before the District Supervisor.
+  @ManyToOne(() => User, { nullable: true, eager: true, onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'countersign_user_id' })
+  countersignUser: User | null;
+
+  @Column({ name: 'countersign_name', type: 'varchar', length: 150, default: '' })
+  countersignName: string;
+
+  @Column({ name: 'sig_countersign', type: 'jsonb', nullable: true })
+  sigCountersign: TaSignature | null;
+
+  // true = the approving authority (Schools Division Superintendent) does not e-sign:
+  // the signed form is emailed to the Travel Authority mailbox instead.
+  @Column({ name: 'approving_by_email', default: false })
+  approvingByEmail: boolean;
+
+  @Column({ name: 'emailed_at', type: 'timestamptz', nullable: true })
+  emailedAt: Date | null;
 
   @ManyToOne(() => User, { nullable: true, eager: true, onDelete: 'SET NULL' })
   @JoinColumn({ name: 'recommending_user_id' })
