@@ -101,6 +101,19 @@ export class StorageService {
     return { uploadUrl: `https://api.cloudinary.com/v1_1/${cloudName}/auto/upload`, fields: { ...toSign, api_key: apiKey, signature } };
   }
 
+  // Special Orders (service credits): JPG, PNG or PDF.
+  signCredit(userId: string): SignedUpload {
+    const { cloudName, apiKey, apiSecret } = this.creds();
+    const toSign: Record<string, string> = {
+      allowed_formats: 'jpg,jpeg,png,pdf',
+      folder: `tasked/special-orders/${userId}`,
+      timestamp: Math.floor(Date.now() / 1000).toString(),
+    };
+    const base = Object.keys(toSign).sort().map((k) => `${k}=${toSign[k]}`).join('&');
+    const signature = createHash('sha1').update(base + apiSecret).digest('hex');
+    return { uploadUrl: `https://api.cloudinary.com/v1_1/${cloudName}/auto/upload`, fields: { ...toSign, api_key: apiKey, signature } };
+  }
+
   // Only accept file addresses that really are on our own Cloudinary account.
   ownsUrl(url: string): boolean {
     const cloudName = this.config.get<string>('CLOUDINARY_CLOUD_NAME');

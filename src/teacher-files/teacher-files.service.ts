@@ -19,7 +19,7 @@ export class TeacherFilesService {
   private async teacherOf(actor: User, teacherId: string): Promise<User> {
     if (actor.role !== Role.ADMIN_OFFICER) throw new ForbiddenException('Only an Administrative Officer can manage teacher files');
     const t = await this.users.findOne({ where: { id: teacherId } });
-    if (!t || t.role !== Role.TEACHER || !t.school) throw new NotFoundException('Teacher not found');
+    if (!t || !t.role || ![Role.TEACHER, Role.NON_TEACHING, Role.DS_SECRETARY].includes(t.role) || !t.school) throw new NotFoundException('Teacher not found');
     if (!(actor.assignedSchools ?? []).some((s) => s.id === t.school!.id)) {
       throw new ForbiddenException('This teacher is not at your school');
     }

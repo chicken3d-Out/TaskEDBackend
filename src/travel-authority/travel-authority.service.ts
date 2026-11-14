@@ -11,7 +11,7 @@ import { TravelSignatory } from './travel-signatory.entity';
 import { StorageService } from '../storage/storage.service';
 
 const FIELDS: (keyof TaFormData)[] = ['name', 'position', 'station', 'purpose', 'host', 'dates', 'destination', 'fund', 'dateFrom', 'dateTo'];
-const APPLICANTS = [Role.TEACHER, Role.SCHOOL_HEAD, Role.ADMIN_OFFICER, Role.PUBLISHER, Role.DS_SECRETARY, Role.DISTRICT_SUPERVISOR];
+const APPLICANTS = [Role.TEACHER, Role.NON_TEACHING, Role.SCHOOL_HEAD, Role.ADMIN_OFFICER, Role.PUBLISHER, Role.DS_SECRETARY, Role.DISTRICT_SUPERVISOR];
 const SIGNERS = APPLICANTS;
 const ISO = /^\d{4}-\d{2}-\d{2}$/;
 const MAX_SIG = 400_000;
@@ -46,7 +46,7 @@ export class TravelAuthorityService {
   private async teacherFor(actor: User, teacherId: string): Promise<User> {
     if (actor.role !== Role.ADMIN_OFFICER && actor.role !== Role.PUBLISHER) throw new ForbiddenException('Only an Administrative Officer can do this');
     const t = await this.users.findOne({ where: { id: teacherId } });
-    if (!t || t.role !== Role.TEACHER || !t.school) throw new NotFoundException('Teacher not found');
+    if (!t || !t.role || ![Role.TEACHER, Role.NON_TEACHING, Role.DS_SECRETARY].includes(t.role) || !t.school) throw new NotFoundException('Teacher not found');
     if (!(actor.assignedSchools ?? []).some((s) => s.id === t.school!.id)) throw new ForbiddenException('This teacher is not at your school');
     return t;
   }

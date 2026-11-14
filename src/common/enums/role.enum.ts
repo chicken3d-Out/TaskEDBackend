@@ -5,6 +5,7 @@ export enum Role {
   SCHOOL_HEAD = 'school_head', // one per school: same school powers as the School account
   DISTRICT_SUPERVISOR = 'district_supervisor', // signs Travel Authorities as the District Supervisor
   DS_SECRETARY = 'ds_secretary', // signs for the District Supervisor (using the signature set by the Administrator) and numbers Travel Authorities
+  NON_TEACHING = 'non_teaching', // non-teaching staff of a school (two or more per school)
   SCHOOL = 'school', // one account per school: school profile, teachers, school files
   ADMINISTRATOR = 'administrator', // top-level: users, roles, approvals, forum moderation
 }

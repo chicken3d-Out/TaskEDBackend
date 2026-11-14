@@ -35,6 +35,8 @@ export interface TeacherDto {
   contactNumber?: string;
   designation?: string;
   depedEmail?: string;
+  // 'non_teaching' adds / approves the person as Non-Teaching staff instead of a Teacher
+  role?: string;
 }
 
 const clean = (v?: string | null) => {
@@ -181,15 +183,16 @@ export class SchoolPortalService {
   // ---- teachers ----
   // Teachers of the school, plus people who chose this school in their
   // profile and are still waiting for a role.
-  async listTeachers(user: User, schoolId: string) {
+  async listTeachers(user: User, schoolId: string, group?: string) {
     this.assertView(user, schoolId);
     const atSchool = await this.usersRepo.find({
       where: { school: { id: schoolId } },
       order: { name: 'ASC' },
     });
+    const mine = group === 'non_teaching' ? [Role.NON_TEACHING, Role.DS_SECRETARY] : [Role.TEACHER];
     return atSchool.filter(
       (u) =>
-        u.role === Role.TEACHER ||
+        (!!u.role && mine.includes(u.role)) ||
         (!u.role && u.status === AccountStatus.PENDING && u.registrationComplete),
     );
   }
@@ -198,7 +201,7 @@ export class SchoolPortalService {
     this.assertView(user, schoolId);
     const target = await this.usersService.findById(userId);
     const isCandidate =
-      target && target.school?.id === schoolId && (target.role === Role.TEACHER || !target.role);
+      target && target.school?.id === schoolId && (target.role === Role.TEACHER || target.role === Role.NON_TEACHING || target.role === Role.DS_SECRETARY || !target.role);
     if (!target || !isCandidate) throw new NotFoundException('Teacher not found at this school');
     return target;
   }
@@ -214,13 +217,13 @@ export class SchoolPortalService {
     }
     const teacher = this.usersRepo.create({
       depedEmail: email,
-      role: Role.TEACHER,
+      role: dto.role === 'non_teaching' ? Role.NON_TEACHING : Role.TEACHER,
       status: AccountStatus.APPROVED,
       approvedBy: user,
       approvedAt: new Date(),
       assignedSchools: [],
     });
-    await this.usersService.applyProfile(teacher, { ...dto, schoolId } as UpdateProfileDto);
+    await this.usersService.applyProfile(teacher, { ...dto, role: undefined, schoolId } as UpdateProfileDto);
     const saved = await this.usersRepo.save(teacher);
     return this.usersService.findById(saved.id);
   }
@@ -249,18 +252,18 @@ export class SchoolPortalService {
       throw new BadRequestException('Status must be approved or suspended');
     }
     const target = await this.getManagedTeacher(user, schoolId, userId);
-    if (target.role !== Role.TEACHER) throw new BadRequestException('Approve this person as a teacher first');
+    if (target.role !== Role.TEACHER && target.role !== Role.NON_TEACHING) throw new BadRequestException('Approve this person first');
     target.status = status;
     await this.usersRepo.save(target);
     return this.usersService.findById(target.id);
   }
 
-  async approveTeacher(user: User, schoolId: string, userId: string) {
+  async approveTeacher(user: User, schoolId: string, userId: string, asRole?: string) {
     const target = await this.getManagedTeacher(user, schoolId, userId);
     if (target.role || target.status !== AccountStatus.PENDING) {
       throw new BadRequestException('This account is not waiting for approval');
     }
-    target.role = Role.TEACHER;
+    target.role = asRole === 'non_teaching' ? Role.NON_TEACHING : Role.TEACHER;
     target.status = AccountStatus.APPROVED;
     target.assignedSchools = [];
     target.approvedBy = user;

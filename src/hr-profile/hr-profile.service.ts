@@ -30,10 +30,10 @@ export class HrProfileService {
   private canEdit(actor: User, t: User) {
     if (actor.role === Role.ADMINISTRATOR) return true;
     // AO, Publisher, School Head and School keep their own profile; a Teacher's is kept by the school's AO.
-    if (actor.id === t.id && actor.role !== Role.TEACHER) return true;
+    if (actor.id === t.id && actor.role !== Role.TEACHER && actor.role !== Role.NON_TEACHING) return true;
     return (
       actor.role === Role.ADMIN_OFFICER &&
-      t.role === Role.TEACHER &&
+      !!t.role && [Role.TEACHER, Role.NON_TEACHING, Role.DS_SECRETARY].includes(t.role) &&
       !!t.school &&
       (actor.assignedSchools ?? []).some((s) => s.id === t.school!.id)
     );

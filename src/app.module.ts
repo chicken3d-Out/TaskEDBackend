@@ -25,6 +25,9 @@ import { TravelAuthority } from './travel-authority/travel-authority.entity';
 import { TravelAttachment } from './travel-authority/travel-attachment.entity';
 import { TravelSignatory } from './travel-authority/travel-signatory.entity';
 import { TravelAuthorityModule } from './travel-authority/travel-authority.module';
+import { ServiceCreditsModule } from './service-credits/service-credits.module';
+import { LeaveApplication } from './service-credits/leave-application.entity';
+import { LeaveCredit, LeaveCreditLog, LeaveCreditRequest } from './service-credits/service-credit.entities';
 import { PersonalFile } from './my-files/personal-file.entity';
 import { User } from './users/user.entity';
 import { School } from './schools/school.entity';
@@ -77,6 +80,10 @@ import { HealthController } from './health.controller';
           TeacherFile,
           TravelAuthority,
           TravelSignatory,
+          LeaveCredit,
+          LeaveCreditLog,
+          LeaveCreditRequest,
+          LeaveApplication,
           TravelAttachment,
         ],
         // Fine for local dev; switch to migrations (npm run migration:run)
@@ -98,6 +105,7 @@ import { HealthController } from './health.controller';
     SchoolPortalModule,
     MyFilesModule,
     TravelAuthorityModule,
+    ServiceCreditsModule,
     HrProfileModule,
     TeacherFilesModule,
   ],

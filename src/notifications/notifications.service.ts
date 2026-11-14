@@ -18,6 +18,7 @@ const PUSH_TITLES: Record<NotificationType, string> = {
   [NotificationType.CALENDAR_REMINDER]: 'Upcoming event',
   [NotificationType.FORUM_REVIEW]: 'Forum',
   [NotificationType.TRAVEL_AUTHORITY]: 'Travel Authority',
+  [NotificationType.SERVICE_CREDIT]: 'Service Credits',
 };
 
 @Injectable()

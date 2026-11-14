@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Put, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Put, Query, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { ApprovedGuard } from '../common/guards/approved.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
@@ -37,8 +37,8 @@ export class SchoolPortalController {
 
   // ---- teachers ----
   @Get('schools/:id/teachers')
-  teachers(@CurrentUser() user: User, @Param('id') id: string) {
-    return this.portal.listTeachers(user, id);
+  teachers(@CurrentUser() user: User, @Param('id') id: string, @Query('group') group?: string) {
+    return this.portal.listTeachers(user, id, group);
   }
 
   @Post('schools/:id/teachers')
@@ -67,8 +67,8 @@ export class SchoolPortalController {
   }
 
   @Post('schools/:id/teachers/:userId/approve')
-  approveTeacher(@CurrentUser() user: User, @Param('id') id: string, @Param('userId') userId: string) {
-    return this.portal.approveTeacher(user, id, userId);
+  approveTeacher(@CurrentUser() user: User, @Param('id') id: string, @Param('userId') userId: string, @Body() body: { role?: string }) {
+    return this.portal.approveTeacher(user, id, userId, body?.role);
   }
 
   @Post('schools/:id/teachers/:userId/reject')

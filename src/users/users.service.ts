@@ -293,7 +293,7 @@ export class UsersService implements OnApplicationBootstrap {
       throw new BadRequestException('You cannot change your own role');
     }
 
-    if (dto.role === Role.TEACHER) {
+    if (dto.role === Role.TEACHER || dto.role === Role.NON_TEACHING) {
       if (!target.school) {
         throw new BadRequestException('This user has no school on their profile yet');
       }
@@ -432,7 +432,7 @@ export class UsersService implements OnApplicationBootstrap {
 
     await this.applyProfile(user, dto);
 
-    if ((user.role === Role.TEACHER || user.role === Role.SCHOOL || user.role === Role.SCHOOL_HEAD) && !user.school) {
+    if ((user.role === Role.TEACHER || user.role === Role.NON_TEACHING || user.role === Role.SCHOOL || user.role === Role.SCHOOL_HEAD) && !user.school) {
       throw new BadRequestException('Teachers, School Heads and School accounts need a school');
     }
     if (user.role === Role.SCHOOL_HEAD) {

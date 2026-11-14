@@ -7,7 +7,7 @@ import { PersonalFile } from './personal-file.entity';
 import { cleanLink } from '../common/links';
 import { schoolYearOf, validSchoolYear } from '../common/school-year';
 
-const ALLOWED_ROLES = [Role.TEACHER, Role.SCHOOL_HEAD, Role.ADMIN_OFFICER, Role.PUBLISHER, Role.DISTRICT_SUPERVISOR, Role.DS_SECRETARY, Role.SCHOOL];
+const ALLOWED_ROLES = [Role.TEACHER, Role.NON_TEACHING, Role.SCHOOL_HEAD, Role.ADMIN_OFFICER, Role.PUBLISHER, Role.DISTRICT_SUPERVISOR, Role.DS_SECRETARY, Role.SCHOOL];
 
 // "My files": a private, organised list of links to files the person keeps in
 // their own Google Drive / OneDrive, grouped by school year and category.
