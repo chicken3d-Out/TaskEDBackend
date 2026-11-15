@@ -3,9 +3,9 @@ import { User } from '../users/user.entity';
 
 // Which kinds of leave credit a person can have:
 //   Teachers:      service_credit, wellness
-//   Non-teaching:  vl_sl (Vacation + Sick Leave as one credit), wellness, spl, fl, cto
-export type CreditKind = 'service_credit' | 'wellness' | 'vl_sl' | 'spl' | 'fl' | 'cto';
-export type CreditLogType = 'initial' | 'special_order' | 'edit' | 'reset' | 'deduction' | 'restore';
+//   Non-teaching:  vl (earns 10 a year), sl (earns 15 a year), wellness, spl, fl, cto
+export type CreditKind = 'service_credit' | 'wellness' | 'vl' | 'sl' | 'spl' | 'fl' | 'cto';
+export type CreditLogType = 'initial' | 'special_order' | 'edit' | 'reset' | 'deduction' | 'restore' | 'accrual' | 'expiry';
 
 const num = { to: (v: number | null) => v, from: (v: string | null) => (v == null ? v : parseFloat(v)) };
 
@@ -27,6 +27,9 @@ export class LeaveCredit {
 
   // Wellness Leave: the year this balance belongs to (it goes back to 5 every year)
   @Column({ type: 'int', nullable: true }) year: number | null;
+
+  // Vacation / Sick Leave: the last month ('YYYY-MM') whose monthly earning was added
+  @Column({ name: 'accrual_month', type: 'varchar', length: 7, nullable: true }) accrualMonth: string | null;
 
   @UpdateDateColumn({ name: 'updated_at' }) updatedAt: Date;
 }
@@ -52,6 +55,10 @@ export class LeaveCreditLog {
   @Column({ name: 'file_name', type: 'varchar', length: 200, nullable: true }) fileName: string | null;
   @Column({ name: 'file_url', type: 'varchar', length: 600, nullable: true }) fileUrl: string | null;
   @Column({ name: 'file_public_id', type: 'varchar', length: 300, nullable: true }) filePublicId: string | null;
+
+  // CTO added by a Special Order is good for one year from the date it was approved
+  @Column({ name: 'expires_at', type: 'date', nullable: true }) expiresAt: string | null;
+  @Column({ type: 'jsonb', nullable: true }) meta: unknown;
 
   // the leave application that used the credit (release 2)
   @Column({ name: 'leave_id', type: 'uuid', nullable: true }) leaveId: string | null;
@@ -90,5 +97,22 @@ export class LeaveCreditRequest {
   @Column({ name: 'decided_note', type: 'text', nullable: true }) decidedNote: string | null;
   @Column({ name: 'decided_at', type: 'timestamptz', nullable: true }) decidedAt: Date | null;
 
+  @CreateDateColumn({ name: 'created_at' }) createdAt: Date;
+}
+
+// CTO comes in batches because each Special Order's hours expire a year after approval.
+@Entity('leave_credit_batches')
+export class LeaveCreditBatch {
+  @PrimaryGeneratedColumn('uuid') id: string;
+
+  @ManyToOne(() => User, { onDelete: 'CASCADE', nullable: false })
+  @JoinColumn({ name: 'user_id' })
+  user: User;
+
+  @Column({ type: 'varchar', length: 20, default: 'cto' }) kind: CreditKind;
+  @Column({ type: 'numeric', precision: 7, scale: 2, transformer: num }) amount: number;
+  @Column({ type: 'numeric', precision: 7, scale: 2, transformer: num }) remaining: number;
+  @Column({ name: 'expires_at', type: 'date', nullable: true }) expiresAt: string | null;
+  @Column({ name: 'so_number', type: 'varchar', length: 100, nullable: true }) soNumber: string | null;
   @CreateDateColumn({ name: 'created_at' }) createdAt: Date;
 }

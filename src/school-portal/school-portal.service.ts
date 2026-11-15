@@ -189,10 +189,10 @@ export class SchoolPortalService {
       where: { school: { id: schoolId } },
       order: { name: 'ASC' },
     });
-    const mine = group === 'non_teaching' ? [Role.NON_TEACHING, Role.DS_SECRETARY] : [Role.TEACHER];
+    const mine = group === 'non_teaching' ? [Role.NON_TEACHING, Role.DS_SECRETARY, Role.SCHOOL_HEAD] : [Role.TEACHER];
     return atSchool.filter(
       (u) =>
-        (!!u.role && mine.includes(u.role)) ||
+        (!!u.role && mine.includes(u.role) && (u.role !== Role.SCHOOL_HEAD || u.status === AccountStatus.APPROVED)) ||
         (!u.role && u.status === AccountStatus.PENDING && u.registrationComplete),
     );
   }

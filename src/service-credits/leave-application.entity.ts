@@ -12,6 +12,10 @@ export interface LeaveData {
   days: number; dates: string; commutation: 'not' | 'requested';
 }
 
+// 7.A: the Vacation / Sick Leave columns at the time the credit was deducted
+export interface LeaveCreditCol { earned: number; less: number; balance: number }
+export interface LeaveCreditSnapshot { asOf: string; label: string; col: 'vl' | 'sl' | null; vl: LeaveCreditCol | null; sl: LeaveCreditCol | null }
+
 const num = { to: (v: number | null) => v, from: (v: string | null) => (v == null ? v : parseFloat(v)) };
 
 // A Form 6 (Application for Leave).
@@ -34,7 +38,7 @@ export class LeaveApplication {
   @Column({ type: 'numeric', precision: 6, scale: 2, default: 0, transformer: num }) days: number;
   @Column({ type: 'jsonb', default: () => "'{}'" }) sigs: { applicant?: LeaveSig; ao?: LeaveSig; signatory?: LeaveSig };
   // 7.A: the credit at the time it was deducted
-  @Column({ type: 'jsonb', nullable: true }) credit: { asOf: string; label: string; earned: number; less: number; balance: number } | null;
+  @Column({ type: 'jsonb', nullable: true }) credit: LeaveCreditSnapshot | null;
   @Column({ default: false }) deducted: boolean;
   @Column({ type: 'jsonb', nullable: true }) recommendation: { decision: 'approval' | 'disapproval'; reason: string } | null;
   @Column({ type: 'varchar', length: 300, nullable: true }) note: string | null;

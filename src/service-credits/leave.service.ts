@@ -77,13 +77,14 @@ export class LeaveService {
     let signAs: string | null = null;
     if (myTurn === 'applicant' || myTurn === 'ao' || myTurn === 'signatory') signAs = await this.mySignature(me, myTurn === 'signatory' && sg.ds);
     const hrmo = await this.named('hrmo'), asds = await this.named('asds');
+    const titles = await this.getSettings();
     const kinds = kindsFor(a.applicant.role) ?? [];
     return {
       id: a.id, status: a.status, data: a.data, kind: a.kind, kindLabel: a.kind ? KIND_LABEL[a.kind] : null, days: a.days, credit: a.credit, deducted: a.deducted, recommendation: a.recommendation, note: a.note,
       applicant: { id: a.applicant.id, name: a.applicant.name, role: a.applicant.role, school: a.applicant.school?.name ?? '' },
       filedBy: a.filedBy ? { id: a.filedBy.id, name: a.filedBy.name } : null,
       sigs: a.sigs, myTurn, signAs, kinds: kinds.map((k) => ({ kind: k, label: KIND_LABEL[k] })),
-      printed: { hrmo: hrmo.name, asds: asds.name, signatory: sg.name, signatoryTitle: sg.title, signatoryNote: sg.note ?? null },
+      printed: { hrmo: hrmo.name, hrmoTitle: titles.hrmoTitle || 'HRMO II', asds: asds.name, asdsTitle: titles.asdsTitle || 'Assistant Schools Division Superintendent', signatory: sg.name, signatoryTitle: sg.title, signatoryNote: sg.note ?? null },
       createdAt: a.createdAt, updatedAt: a.updatedAt,
     };
   }
@@ -125,9 +126,9 @@ export class LeaveService {
     const data: LeaveData = {
       office: str(d.office, 150), lastName: str(d.lastName, 60), firstName: str(d.firstName, 60), middleName: str(d.middleName, 60), filingDate: str(d.filingDate, 20), position: str(d.position, 100), salary: str(d.salary, 30),
       leaveType, otherLeave: str(d.otherLeave, 80),
-      where: d.where === 'ph' || d.where === 'abroad' ? d.where : '', whereText: str(d.whereText, 120), illness: d.illness === 'hospital' || d.illness === 'outpatient' ? d.illness : '', illnessText: str(d.illnessText, 120), womenText: str(d.womenText, 120),
+      where: '', whereText: '', illness: d.illness === 'hospital' || d.illness === 'outpatient' ? d.illness : '', illnessText: str(d.illnessText, 120), womenText: str(d.womenText, 120),
       study: d.study === 'masters' || d.study === 'bar' ? d.study : '', monetization: d.monetization === 'monetization' || d.monetization === 'terminal' ? d.monetization : '',
-      days: round2(days), dates: str(d.dates, 120), commutation: d.commutation === 'requested' ? 'requested' : 'not',
+      days: round2(days), dates: str(d.dates, 120), commutation: 'not',
     };
     if (!data.lastName || !data.firstName) throw new BadRequestException('Enter the applicant’s name');
     let k: CreditKind | null = null;
@@ -178,11 +179,16 @@ export class LeaveService {
   private async deduct(a: LeaveApplication, actor: User) {
     if (!a.kind) return;
     const cur = await this.credits.balanceOf(a.applicant, a.kind);
-    if (!cur || !cur.initialSet) throw new BadRequestException(`${KIND_LABEL[a.kind]} has no starting count yet. Set it in Service Credits first.`);
+    if (!cur || !cur.usable) throw new BadRequestException(`${KIND_LABEL[a.kind]} has no starting count yet. Set it in Service Credits first.`);
     if (cur.balance < a.days) throw new BadRequestException(`${a.applicant.name} has only ${cur.balance} day(s) of ${KIND_LABEL[a.kind]}, but ${a.days} are applied for.`);
+    // 7.A shows Vacation and Sick Leave; a teacher's Service Credit is shown under Vacation Leave
+    const colOf = a.kind === 'sl' ? 'sl' : a.kind === 'vl' || a.kind === 'service_credit' ? 'vl' : null;
+    const other = colOf === 'vl' && a.kind === 'vl' ? await this.credits.balanceOf(a.applicant, 'sl') : colOf === 'sl' ? await this.credits.balanceOf(a.applicant, 'vl') : null;
     await this.credits.spend(a.applicant, a.kind, a.days, `${a.data.leaveType}, ${a.data.dates}`, actor, a.id);
     a.deducted = true;
-    a.credit = { asOf: new Date().toISOString().slice(0, 10), label: KIND_LABEL[a.kind], earned: cur.balance, less: a.days, balance: round2(cur.balance - a.days) };
+    const mine = { earned: cur.balance, less: a.days, balance: round2(cur.balance - a.days) };
+    const theirs = other ? { earned: other.balance, less: 0, balance: other.balance } : null;
+    a.credit = { asOf: new Date().toISOString().slice(0, 10), label: KIND_LABEL[a.kind], col: colOf, vl: colOf === 'vl' ? mine : theirs, sl: colOf === 'sl' ? mine : theirs };
   }
 
   async sign(me: User, id: string, dto: { x: number; y: number; kind?: string | null; decision?: string; reason?: string }) {
@@ -265,12 +271,20 @@ export class LeaveService {
   }
 
   // ---------- admin: the names printed on the form ----------
-  async getSettings() { return { hrmo: (await this.sigs.findOne({ where: { key: 'hrmo' } }))?.name ?? '', asds: (await this.sigs.findOne({ where: { key: 'asds' } }))?.name ?? '' }; }
-  async setSettings(dto: { hrmo?: string; asds?: string }) {
-    for (const [key, v] of [['hrmo', dto.hrmo], ['asds', dto.asds]] as const) {
+  async getSettings() {
+    const g = async (k: string) => (await this.sigs.findOne({ where: { key: k } }))?.name ?? '';
+    return { hrmo: await g('hrmo'), hrmoTitle: await g('hrmo_title'), asds: await g('asds'), asdsTitle: await g('asds_title') };
+  }
+  async setSettings(dto: { hrmo?: string; hrmoTitle?: string; asds?: string; asdsTitle?: string }) {
+    for (const [key, v] of [['hrmo', dto.hrmo], ['hrmo_title', dto.hrmoTitle], ['asds_title', dto.asdsTitle]] as const) {
       if (v === undefined) continue;
       const row = (await this.sigs.findOne({ where: { key } })) ?? this.sigs.create({ key, signature: null, user: null });
       row.name = str(v, 150);
+      await this.sigs.save(row);
+    }
+    if (dto.asds !== undefined) {
+      const row = (await this.sigs.findOne({ where: { key: 'asds' } })) ?? this.sigs.create({ key: 'asds', signature: null, user: null });
+      row.name = str(dto.asds, 150);
       await this.sigs.save(row);
     }
     return this.getSettings();

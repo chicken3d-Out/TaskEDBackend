@@ -5,6 +5,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
 import { StorageModule } from '../storage/storage.module';
 import { LeaveCredit, LeaveCreditLog, LeaveCreditRequest } from './service-credit.entities';
 import { ServiceCreditsService } from './service-credits.service';
+import { LeaveCreditBatch } from './service-credit.entities';
 import { LeaveApplication } from './leave-application.entity';
 import { LeaveService } from './leave.service';
 import { LeaveController } from './leave.controller';
@@ -12,7 +13,7 @@ import { TravelSignatory } from '../travel-authority/travel-signatory.entity';
 import { ServiceCreditsController } from './service-credits.controller';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([LeaveCredit, LeaveCreditLog, LeaveCreditRequest, LeaveApplication, TravelSignatory, User]), NotificationsModule, StorageModule],
+  imports: [TypeOrmModule.forFeature([LeaveCredit, LeaveCreditLog, LeaveCreditRequest, LeaveCreditBatch, LeaveApplication, TravelSignatory, User]), NotificationsModule, StorageModule],
   controllers: [ServiceCreditsController, LeaveController],
   providers: [ServiceCreditsService, LeaveService],
   exports: [ServiceCreditsService],

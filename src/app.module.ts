@@ -27,7 +27,7 @@ import { TravelSignatory } from './travel-authority/travel-signatory.entity';
 import { TravelAuthorityModule } from './travel-authority/travel-authority.module';
 import { ServiceCreditsModule } from './service-credits/service-credits.module';
 import { LeaveApplication } from './service-credits/leave-application.entity';
-import { LeaveCredit, LeaveCreditLog, LeaveCreditRequest } from './service-credits/service-credit.entities';
+import { LeaveCredit, LeaveCreditBatch, LeaveCreditLog, LeaveCreditRequest } from './service-credits/service-credit.entities';
 import { PersonalFile } from './my-files/personal-file.entity';
 import { User } from './users/user.entity';
 import { School } from './schools/school.entity';
@@ -83,6 +83,7 @@ import { HealthController } from './health.controller';
           LeaveCredit,
           LeaveCreditLog,
           LeaveCreditRequest,
+          LeaveCreditBatch,
           LeaveApplication,
           TravelAttachment,
         ],

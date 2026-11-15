@@ -6,31 +6,41 @@ import { AccountStatus, Role } from '../common/enums/role.enum';
 import { NotificationsService } from '../notifications/notifications.service';
 import { NotificationType } from '../notifications/notification.entity';
 import { StorageService } from '../storage/storage.service';
-import { CreditKind, CreditLogType, LeaveCredit, LeaveCreditLog, LeaveCreditRequest } from './service-credit.entities';
+import { CreditKind, CreditLogType, LeaveCredit, LeaveCreditBatch, LeaveCreditLog, LeaveCreditRequest } from './service-credit.entities';
 
 export const KIND_LABEL: Record<CreditKind, string> = {
   service_credit: 'Service Credit',
   wellness: 'Wellness Leave',
-  vl_sl: 'Vacation / Sick Leave',
+  vl: 'Vacation Leave',
+  sl: 'Sick Leave',
   spl: 'Special Privilege Leave (SPL)',
   fl: 'Force Leave (FL)',
   cto: 'Compensatory Time Off (CTO)',
 };
 
 const TEACHER_KINDS: CreditKind[] = ['service_credit', 'wellness'];
-const STAFF_KINDS: CreditKind[] = ['vl_sl', 'wellness', 'spl', 'fl', 'cto'];
-const WELLNESS_PER_YEAR = 5;
+const STAFF_KINDS: CreditKind[] = ['vl', 'sl', 'wellness', 'spl', 'fl', 'cto'];
+// renewed every January
+const YEARLY: Partial<Record<CreditKind, number>> = { wellness: 5, fl: 5, spl: 3 };
+// earned a little every month, so that a full year adds exactly this many
+const EARNS_PER_YEAR: Partial<Record<CreditKind, number>> = { vl: 10, sl: 15 };
 const MAX = 9999;
 
-// Teachers keep Service Credit and Wellness Leave. Non-teaching staff (non-teaching, School Head, AO, Publisher)
-// keep Vacation/Sick Leave as one credit, Wellness Leave, SPL, FL and CTO.
+// Teachers keep Service Credit and Wellness Leave. Non-teaching staff (non-teaching, DS Secretary, School Head, AO, Publisher)
+// keep Vacation Leave, Sick Leave, Wellness Leave, SPL, FL and CTO.
 export function kindsFor(role: Role | null | undefined): CreditKind[] | null {
   if (role === Role.TEACHER) return TEACHER_KINDS;
   if (role === Role.NON_TEACHING || role === Role.DS_SECRETARY || role === Role.SCHOOL_HEAD || role === Role.ADMIN_OFFICER || role === Role.PUBLISHER) return STAFF_KINDS;
+  if (role === Role.DISTRICT_SUPERVISOR) return []; // applies for leave, but keeps no credits here
   return null;
 }
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
+const ym = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+const todayIso = () => new Date().toISOString().slice(0, 10);
+// a credit the person can already use before the AO confirms the count (it has a yearly default)
+export const isAuto = (k: CreditKind) => YEARLY[k] !== undefined;
 
 @Injectable()
 export class ServiceCreditsService {
@@ -38,6 +48,7 @@ export class ServiceCreditsService {
     @InjectRepository(LeaveCredit) private credits: Repository<LeaveCredit>,
     @InjectRepository(LeaveCreditLog) private logs: Repository<LeaveCreditLog>,
     @InjectRepository(LeaveCreditRequest) private requests: Repository<LeaveCreditRequest>,
+    @InjectRepository(LeaveCreditBatch) private batches: Repository<LeaveCreditBatch>,
     @InjectRepository(User) private users: Repository<User>,
     private notifications: NotificationsService,
     private storage: StorageService,
@@ -75,26 +86,72 @@ export class ServiceCreditsService {
   }
 
   // ---------- credits ----------
-  // Makes sure every credit row exists and Wellness Leave belongs to this year.
+  // Makes sure every credit row exists, the yearly credits belong to this year, Vacation/Sick Leave has its
+  // monthly earnings, and CTO that passed its year is taken off.
   private async ensure(target: User): Promise<LeaveCredit[]> {
     const kinds = kindsFor(target.role)!;
-    const year = new Date().getFullYear();
+    const now = new Date();
+    const year = now.getFullYear();
     const rows = await this.credits.find({ where: { user: { id: target.id } } });
     const out: LeaveCredit[] = [];
     for (const kind of kinds) {
       let row = rows.find((r) => r.kind === kind);
+      const yearly = YEARLY[kind];
       if (!row) {
-        row = this.credits.create({ user: { id: target.id } as User, kind, balance: kind === 'wellness' ? WELLNESS_PER_YEAR : 0, initialSet: kind === 'wellness', year: kind === 'wellness' ? year : null });
+        row = await this.credits.save(this.credits.create({ user: { id: target.id } as User, kind, balance: yearly ?? 0, initialSet: false, year: yearly !== undefined ? year : null, accrualMonth: null }));
+        if (yearly !== undefined) await this.log(target, kind, 'reset', yearly, yearly, `${KIND_LABEL[kind]} for ${year}`, null);
+      } else if (yearly !== undefined && row.year == null && row.initialSet) {
+        row.year = year; row = await this.credits.save(row); // the AO already confirmed this year's count
+      } else if (yearly !== undefined && row.year !== year) {
+        const before = row.balance;
+        row.balance = yearly; row.year = year;
         row = await this.credits.save(row);
-        if (kind === 'wellness') await this.log(target, kind, 'reset', WELLNESS_PER_YEAR, WELLNESS_PER_YEAR, `Wellness Leave for ${year}`, null);
-      } else if (kind === 'wellness' && row.year !== year) {
-        row.balance = WELLNESS_PER_YEAR; row.year = year;
-        row = await this.credits.save(row);
-        await this.log(target, kind, 'reset', WELLNESS_PER_YEAR - 0, WELLNESS_PER_YEAR, `Wellness Leave reset to ${WELLNESS_PER_YEAR} for ${year}`, null);
+        await this.log(target, kind, 'reset', yearly - before, yearly, `${KIND_LABEL[kind]} renewed to ${yearly} for ${year}`, null);
+      }
+      // monthly earning of Vacation / Sick Leave
+      const per = EARNS_PER_YEAR[kind];
+      if (per !== undefined && row.initialSet) {
+        if (!row.accrualMonth) { row.accrualMonth = ym(now); row = await this.credits.save(row); }
+        let guard = 0;
+        while (row.accrualMonth! < ym(now) && guard++ < 36) {
+          let [y, m] = row.accrualMonth!.split('-').map(Number);
+          m += 1; if (m > 12) { m = 1; y += 1; }
+          const add = round2(round2((per * m) / 12) - round2((per * (m - 1)) / 12));
+          row.balance = round2(row.balance + add); row.accrualMonth = `${y}-${String(m).padStart(2, '0')}`;
+          row = await this.credits.save(row);
+          await this.log(target, kind, 'accrual', add, row.balance, `Earned for ${MONTHS[m - 1]} ${y}`, null);
+        }
+      }
+      // CTO that is a year old
+      if (kind === 'cto') {
+        const old = await this.batches.find({ where: { user: { id: target.id }, kind: 'cto' } });
+        for (const b of old.filter((x) => x.remaining > 0 && x.expiresAt && x.expiresAt <= todayIso())) {
+          row.balance = round2(Math.max(0, row.balance - b.remaining));
+          row = await this.credits.save(row);
+          await this.log(target, kind, 'expiry', -b.remaining, row.balance, `CTO expired${b.soNumber ? ` (S.O. ${b.soNumber})` : ''}`, null, { expiresAt: b.expiresAt });
+          b.remaining = 0; await this.batches.save(b);
+        }
       }
       out.push(row);
     }
     return out;
+  }
+
+  // CTO bookkeeping: add hours (optionally with an expiry), or take hours off the ones that expire first.
+  private async addBatch(target: User, amount: number, expiresAt: string | null, soNumber: string | null) {
+    await this.batches.save(this.batches.create({ user: { id: target.id } as User, kind: 'cto', amount, remaining: amount, expiresAt, soNumber }));
+  }
+  private async takeBatches(target: User, amount: number) {
+    const rows = (await this.batches.find({ where: { user: { id: target.id }, kind: 'cto' } })).filter((b) => b.remaining > 0)
+      .sort((a, b) => (a.expiresAt ?? '9999').localeCompare(b.expiresAt ?? '9999'));
+    let left = amount; const used: { id: string; amount: number }[] = [];
+    for (const b of rows) {
+      if (left <= 0) break;
+      const t = Math.min(b.remaining, left);
+      b.remaining = round2(b.remaining - t); left = round2(left - t); used.push({ id: b.id, amount: t });
+      await this.batches.save(b);
+    }
+    return used;
   }
 
   private async log(target: User, kind: CreditKind, type: CreditLogType, delta: number, after: number, reason: string | null, actor: User | null, extra: Partial<LeaveCreditLog> = {}) {
@@ -105,18 +162,22 @@ export class ServiceCreditsService {
     const { target, manage } = await this.viewable(actor, id);
     const rows = await this.ensure(target);
     const pending = await this.requests.find({ where: { user: { id: target.id }, status: 'pending' } });
-    const logs = await this.logs.find({ where: { user: { id: target.id } }, order: { createdAt: 'DESC' }, take: 100 });
+    const logs = await this.logs.find({ where: { user: { id: target.id } }, order: { createdAt: 'DESC' }, take: 150 });
+    const cto = (await this.batches.find({ where: { user: { id: target.id }, kind: 'cto' } })).filter((b) => b.remaining > 0 && b.expiresAt).sort((a, b) => a.expiresAt!.localeCompare(b.expiresAt!));
     return {
       user: { id: target.id, name: target.name, role: target.role, school: target.school?.name ?? '' },
       type: target.role === Role.TEACHER ? 'teacher' : 'staff',
+      direct: target.role === Role.TEACHER, // the AO changes a teacher's credits without the Administrator
       canManage: manage,
       isAdmin: actor.role === Role.ADMINISTRATOR,
       credits: rows.map((r) => ({
-        kind: r.kind, label: KIND_LABEL[r.kind], balance: r.balance, initialSet: r.initialSet,
+        kind: r.kind, label: KIND_LABEL[r.kind], balance: r.balance, initialSet: r.initialSet, usable: r.initialSet || isAuto(r.kind),
+        note: r.kind === 'fl' ? 'Renewed to 5 every January' : r.kind === 'spl' ? 'Renewed to 3 every January' : r.kind === 'wellness' ? 'Back to 5 every January' : r.kind === 'vl' ? 'Earns 10 a year, added monthly' : r.kind === 'sl' ? 'Earns 15 a year, added monthly' : null,
+        expires: r.kind === 'cto' ? cto.map((b) => ({ amount: b.remaining, on: b.expiresAt })) : [],
         pending: pending.find((p) => p.kind === r.kind) ? { id: pending.find((p) => p.kind === r.kind)!.id, newBalance: pending.find((p) => p.kind === r.kind)!.newBalance, reason: pending.find((p) => p.kind === r.kind)!.reason } : null,
       })),
       logs: logs.map((l) => ({
-        id: l.id, kind: l.kind, label: KIND_LABEL[l.kind], type: l.type, delta: l.delta, balanceAfter: l.balanceAfter, reason: l.reason,
+        id: l.id, kind: l.kind, label: KIND_LABEL[l.kind] ?? l.kind, type: l.type, delta: l.delta, balanceAfter: l.balanceAfter, reason: l.reason, expiresAt: l.expiresAt,
         soNumber: l.soNumber, fileName: l.fileName, fileUrl: l.fileUrl, actor: l.actor?.name ?? null, createdAt: l.createdAt,
       })),
     };
@@ -164,7 +225,9 @@ export class ServiceCreditsService {
     if (row.initialSet) throw new BadRequestException('The first count is already set. Use “Request change” and give a reason.');
     const before = row.balance;
     row.balance = balance; row.initialSet = true;
+    if (EARNS_PER_YEAR[kind] !== undefined) row.accrualMonth = ym(new Date()); // the count already includes this month
     await this.credits.save(row);
+    if (kind === 'cto') await this.addBatch(target, balance, null, null);
     await this.log(target, kind, 'initial', balance - before, balance, 'Initial count', actor);
     return this.overview(actor, id);
   }
@@ -175,18 +238,19 @@ export class ServiceCreditsService {
     if (!manage) throw new ForbiddenException('Only the school’s Administrative Officer can request a change');
     const kind = this.kindOf(target, String(dto.kind));
     const balance = this.num(dto.balance, 'The new count');
-    const reason = String(dto.reason ?? '').trim();
+    const reason = String(dto.reason ?? '').trim() || (target.role === Role.TEACHER ? 'Updated by the Administrative Officer' : '');
     if (reason.length < 5) throw new BadRequestException('Give a reason for the change');
     const row = await this.rowFor(target, kind);
-    if (!row.initialSet) throw new BadRequestException('Set the first count instead');
-    if (round2(row.balance) === balance) throw new BadRequestException('That is already the count');
+    if (round2(row.balance) === balance && row.initialSet) throw new BadRequestException('That is already the count');
 
-    if (actor.role === Role.ADMINISTRATOR) { // the Administrator needs no approval
-      const before = row.balance;
-      row.balance = balance; await this.credits.save(row);
-      await this.log(target, kind, 'edit', balance - before, balance, reason, actor);
+    // The Administrator, and the AO for a teacher, change the count straight away; it is logged either way.
+    if (actor.role === Role.ADMINISTRATOR || target.role === Role.TEACHER) {
+      const before = row.balance, first = !row.initialSet;
+      row.balance = balance; row.initialSet = true; await this.credits.save(row);
+      await this.log(target, kind, first ? 'initial' : 'edit', balance - before, balance, reason, actor);
       return this.overview(actor, id);
     }
+    if (!row.initialSet) throw new BadRequestException('Set the first count instead');
     if (await this.requests.findOne({ where: { user: { id: target.id }, kind, status: 'pending' } })) throw new BadRequestException('A change for this credit is already waiting for the Administrator');
     await this.requests.save(this.requests.create({ user: { id: target.id } as User, kind, oldBalance: row.balance, newBalance: balance, reason, requestedBy: { id: actor.id } as User, status: 'pending' }));
     const admins = await this.users.find({ where: { role: Role.ADMINISTRATOR } });
@@ -200,11 +264,11 @@ export class ServiceCreditsService {
   }
 
   // Credits earned through a Special Order: the S.O. number and the S.O. file are required.
-  async addSpecialOrder(actor: User, id: string, dto: { kind?: string; amount?: number; soNumber?: string; fileName?: string; url?: string; publicId?: string }) {
+  async addSpecialOrder(actor: User, id: string, dto: { kind?: string; amount?: number; soNumber?: string; fileName?: string; url?: string; publicId?: string; approvedOn?: string }) {
     const { target, manage } = await this.viewable(actor, id);
     if (!manage) throw new ForbiddenException('Only the school’s Administrative Officer can add credits');
     const kind = this.kindOf(target, String(dto.kind));
-    if (kind === 'wellness') throw new BadRequestException('Wellness Leave is 5 days every year and is not added by Special Order');
+    if (isAuto(kind) || EARNS_PER_YEAR[kind] !== undefined) throw new BadRequestException(`${KIND_LABEL[kind]} is renewed or earned automatically and is not added by Special Order`);
     const amount = this.num(dto.amount, 'The credits to add', false);
     const so = String(dto.soNumber ?? '').trim().slice(0, 100);
     const url = String(dto.url ?? '').trim();
@@ -213,9 +277,19 @@ export class ServiceCreditsService {
     if (!this.storage.ownsUrl(url)) throw new BadRequestException('That file was not uploaded through TaskEd');
     const row = await this.rowFor(target, kind);
     if (!row.initialSet) throw new BadRequestException('Set the first count before adding Special Order credits');
+    // CTO from a Special Order is good for one year from the day it was approved
+    let expiresAt: string | null = null;
+    if (kind === 'cto') {
+      const on = new Date(`${String(dto.approvedOn ?? todayIso()).slice(0, 10)}T00:00:00Z`);
+      if (isNaN(on.getTime())) throw new BadRequestException('Enter the date the CTO was approved');
+      on.setUTCFullYear(on.getUTCFullYear() + 1);
+      expiresAt = on.toISOString().slice(0, 10);
+      if (expiresAt <= todayIso()) throw new BadRequestException('That CTO is already a year old');
+      await this.addBatch(target, amount, expiresAt, so);
+    }
     row.balance = round2(row.balance + amount);
     await this.credits.save(row);
-    await this.log(target, kind, 'special_order', amount, row.balance, `Special Order ${so}`, actor, { soNumber: so, fileUrl: url.slice(0, 600), filePublicId: String(dto.publicId ?? '').slice(0, 300) || null, fileName: String(dto.fileName ?? 'Special Order').slice(0, 200) });
+    await this.log(target, kind, 'special_order', amount, row.balance, `Special Order ${so}${expiresAt ? ` · good until ${expiresAt}` : ''}`, actor, { expiresAt, soNumber: so, fileUrl: url.slice(0, 600), filePublicId: String(dto.publicId ?? '').slice(0, 300) || null, fileName: String(dto.fileName ?? 'Special Order').slice(0, 200) });
     if (target.id !== actor.id) await this.notifications.create(target, NotificationType.SERVICE_CREDIT, `${amount} ${KIND_LABEL[kind]} was added to your credits (S.O. ${so}).`).catch(() => undefined);
     return this.overview(actor, id);
   }
@@ -241,6 +315,7 @@ export class ServiceCreditsService {
       const row = await this.rowFor(r.user, r.kind);
       const before = row.balance;
       row.balance = r.newBalance; await this.credits.save(row);
+      if (r.kind === 'cto') { if (r.newBalance > before) await this.addBatch(r.user, round2(r.newBalance - before), null, null); else await this.takeBatches(r.user, round2(before - r.newBalance)); }
       await this.log(r.user, r.kind, 'edit', r.newBalance - before, r.newBalance, `${r.reason} (approved by ${admin.name})`, r.requestedBy);
     }
     await this.requests.save(r);
@@ -253,19 +328,26 @@ export class ServiceCreditsService {
   async balanceOf(target: User, kind: CreditKind) {
     const rows = await this.ensure(target);
     const r = rows.find((x) => x.kind === kind);
-    return r ? { balance: r.balance, initialSet: r.initialSet } : null;
+    return r ? { balance: r.balance, initialSet: r.initialSet, usable: r.initialSet || isAuto(r.kind) } : null;
   }
 
   async spend(target: User, kind: CreditKind, days: number, reason: string, actor: User | null, leaveId: string | null) {
     const row = await this.rowFor(target, kind);
     row.balance = round2(row.balance - days);
     await this.credits.save(row);
-    await this.log(target, kind, 'deduction', -days, row.balance, reason, actor, { leaveId });
+    const used = kind === 'cto' ? await this.takeBatches(target, days) : null;
+    await this.log(target, kind, 'deduction', -days, row.balance, reason, actor, { leaveId, meta: used });
   }
   async refund(target: User, kind: CreditKind, days: number, reason: string, actor: User | null, leaveId: string | null) {
     const row = await this.rowFor(target, kind);
     row.balance = round2(row.balance + days);
     await this.credits.save(row);
+    if (kind === 'cto') {
+      const last = await this.logs.findOne({ where: { user: { id: target.id }, kind, type: 'deduction', leaveId: leaveId as string }, order: { createdAt: 'DESC' } });
+      const used = (last?.meta as { id: string; amount: number }[] | null) ?? [];
+      if (used.length) for (const u of used) { const b = await this.batches.findOne({ where: { id: u.id } }); if (b) { b.remaining = round2(b.remaining + u.amount); await this.batches.save(b); } }
+      else await this.addBatch(target, days, null, null);
+    }
     await this.log(target, kind, 'restore', days, row.balance, reason, actor, { leaveId });
   }
 }
