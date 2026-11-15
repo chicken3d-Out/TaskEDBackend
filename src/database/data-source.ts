@@ -46,6 +46,8 @@ export default new DataSource({
     HrProfile,
     TeacherFile,
   ],
+  // Give a sleeping database time to wake before the migrations run.
+  extra: { connectionTimeoutMillis: 30000 },
   migrations: ['src/database/migrations/*.ts'],
   synchronize: false,
 });

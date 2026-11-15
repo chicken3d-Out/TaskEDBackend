@@ -62,6 +62,18 @@ import { HealthController } from './health.controller';
         password: config.get('DB_PASSWORD', 'change_me'),
         database: config.get('DB_DATABASE', 'tasked'),
         ssl: config.get('DB_SSL') === 'true' ? { rejectUnauthorized: false } : false,
+        // Serverless databases (Neon) sleep after a few idle minutes and need a
+        // couple of seconds to wake. Wait for them instead of failing the request,
+        // retry at start-up, and drop idle connections before the database does
+        // so a request never lands on a dead socket.
+        retryAttempts: 10,
+        retryDelay: 3000,
+        extra: {
+          max: 10,
+          connectionTimeoutMillis: 20000,
+          idleTimeoutMillis: 30000,
+          keepAlive: true,
+        },
         entities: [
           User,
           School,
