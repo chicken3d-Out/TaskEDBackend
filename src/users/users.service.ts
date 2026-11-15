@@ -15,6 +15,8 @@ import { User } from './user.entity';
 import { Role, AccountStatus } from '../common/enums/role.enum';
 import { SchoolsService } from '../schools/schools.service';
 import { School } from '../schools/school.entity';
+import { NotificationsService } from '../notifications/notifications.service';
+import { NotificationType } from '../notifications/notification.entity';
 
 export interface CompleteRegistrationDto {
   firstName: string;
@@ -67,7 +69,21 @@ export class UsersService implements OnApplicationBootstrap {
     @InjectRepository(User) private usersRepo: Repository<User>,
     private schoolsService: SchoolsService,
     private dataSource: DataSource,
+    private notifications: NotificationsService,
   ) {}
+
+  private roleLabel(r?: Role | null) {
+    const m: Record<string, string> = { teacher: 'Teacher', admin_officer: 'Administrative Officer', school_head: 'School Head', school: 'School', administrator: 'Administrator', district_supervisor: 'District Supervisor', ds_secretary: 'DS Secretary', non_teaching: 'Non-Teaching' };
+    return (r && m[r]) || String(r ?? 'user');
+  }
+
+  private async note(u: User, type: NotificationType, message: string) {
+    try { await this.notifications.create(u, type, message, undefined, 'Account'); } catch { /* best effort */ }
+  }
+
+  private async tell(users: User[], message: string) {
+    for (const u of users) await this.note(u, NotificationType.ACCOUNT_REJECTED, message);
+  }
 
   findByGoogleId(googleId: string): Promise<User | null> {
     return this.usersRepo.findOne({ where: { googleId } });
@@ -217,7 +233,17 @@ export class UsersService implements OnApplicationBootstrap {
     }
     await this.applyProfile(user, dto);
     user.status = user.status === AccountStatus.APPROVED ? user.status : AccountStatus.PENDING;
-    return this.usersRepo.save(user);
+    const saved = await this.usersRepo.save(user);
+    try {
+      const who = saved.name || saved.depedEmail;
+      const admins = await this.usersRepo.find({ where: { role: Role.ADMINISTRATOR, status: AccountStatus.APPROVED } });
+      await this.tell(admins, `${who} finished registering and is waiting for a role.`);
+      if (saved.school) {
+        const schools = await this.usersRepo.find({ where: { role: Role.SCHOOL, status: AccountStatus.APPROVED, school: { id: saved.school.id } } });
+        await this.tell(schools, `${who} registered at your school and is waiting for approval.`);
+      }
+    } catch { /* best effort */ }
+    return saved;
   }
 
   async applyProfile(user: User, dto: UpdateProfileDto) {
@@ -324,11 +350,18 @@ export class UsersService implements OnApplicationBootstrap {
       target.assignedSchools = [];
     }
 
+    const wasApproved = target.status === AccountStatus.APPROVED && !!target.role;
+    const oldRole = target.role;
     target.role = dto.role;
     target.status = AccountStatus.APPROVED;
     target.approvedBy = admin;
     target.approvedAt = new Date();
-    return this.usersRepo.save(target);
+    const savedUser = await this.usersRepo.save(target);
+    if (target.id !== admin.id) {
+      if (!wasApproved) await this.note(savedUser, NotificationType.ACCOUNT_APPROVED, `Your account was approved as ${this.roleLabel(dto.role)}. Welcome to TaskEd!`);
+      else if (oldRole !== dto.role) await this.note(savedUser, NotificationType.ACCOUNT_APPROVED, `Your role was changed to ${this.roleLabel(dto.role)}.`);
+    }
+    return savedUser;
   }
 
   // One Administrative Officer per school.
@@ -424,7 +457,9 @@ export class UsersService implements OnApplicationBootstrap {
     target.status = AccountStatus.REJECTED;
     target.approvedBy = admin;
     target.approvedAt = new Date();
-    return this.usersRepo.save(target);
+    const rej = await this.usersRepo.save(target);
+    await this.note(rej, NotificationType.ACCOUNT_REJECTED, 'Your registration was not approved. Please contact your division office.');
+    return rej;
   }
 
   // ---- Administrator tools: add, edit, suspend ----
@@ -513,6 +548,7 @@ export class UsersService implements OnApplicationBootstrap {
     }
     // Only an Administrator assigns schools. An empty schoolId clears it, so an
     // AO can be set to blank to free the school for another AO.
+    const oldSchoolId = target.school?.id ?? null;
     if (dto.schoolId === '') {
       if (target.role === Role.ADMINISTRATOR) throw new BadRequestException('Administrators have no school');
       target.school = null;
@@ -524,7 +560,12 @@ export class UsersService implements OnApplicationBootstrap {
     } else {
       await this.applyProfile(target, dto);
     }
-    return this.usersRepo.save(target);
+    const upd = await this.usersRepo.save(target);
+    const newSchoolId = upd.school?.id ?? null;
+    if (newSchoolId !== oldSchoolId && upd.id !== admin.id) {
+      await this.note(upd, NotificationType.ACCOUNT_APPROVED, upd.school ? `Your school was changed to ${upd.school.name} by the Administrator.` : 'Your school assignment was removed by the Administrator.');
+    }
+    return upd;
   }
 
   async setStatus(admin: User, targetId: string, status: AccountStatus): Promise<User> {
@@ -539,7 +580,9 @@ export class UsersService implements OnApplicationBootstrap {
       throw new BadRequestException('Assign a role first');
     }
     target.status = status;
-    return this.usersRepo.save(target);
+    const st = await this.usersRepo.save(target);
+    await this.note(st, NotificationType.ACCOUNT_REJECTED, status === AccountStatus.SUSPENDED ? 'Your account was suspended by the Administrator.' : 'Your account was reactivated.');
+    return st;
   }
 
   // All teachers at a school need this for the ticket-visibility transparency rule,

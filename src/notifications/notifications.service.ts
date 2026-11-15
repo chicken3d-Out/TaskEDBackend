@@ -34,6 +34,7 @@ export class NotificationsService {
     type: NotificationType,
     message: string,
     relatedEntityId?: string,
+    title?: string,
   ): Promise<Notification> {
     const notification = this.repo.create({
       user,
@@ -48,13 +49,20 @@ export class NotificationsService {
     // in-app/realtime notification above, never something that should
     // block or fail the request that triggered it.
     this.pushService
-      .sendToUser(user, PUSH_TITLES[type] ?? 'TaskEd', message, {
+      .sendToUser(user, title ?? PUSH_TITLES[type] ?? 'TaskEd', message, {
         type,
         relatedEntityId: relatedEntityId ?? '',
       })
       .catch(() => {});
 
     return saved;
+  }
+
+  // Same message to many people; one failure never stops the rest.
+  async createMany(users: User[], type: NotificationType, message: string, relatedEntityId?: string, title?: string) {
+    for (const u of users) {
+      try { await this.create(u, type, message, relatedEntityId, title); } catch { /* best effort */ }
+    }
   }
 
   findForUser(userId: string): Promise<Notification[]> {

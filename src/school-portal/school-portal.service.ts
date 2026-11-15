@@ -248,6 +248,7 @@ export class SchoolPortalService {
     if (target.role !== Role.TEACHER && target.role !== Role.NON_TEACHING) throw new BadRequestException('Approve this person first');
     target.status = status;
     await this.usersRepo.save(target);
+    await this.notifications.create(target, NotificationType.ACCOUNT_REJECTED, status === AccountStatus.SUSPENDED ? 'Your account was suspended by your school.' : 'Your account was reactivated.', undefined, 'Account').catch(() => {});
     return this.usersService.findById(target.id);
   }
 
@@ -277,6 +278,7 @@ export class SchoolPortalService {
     target.approvedBy = user;
     target.approvedAt = new Date();
     await this.usersRepo.save(target);
+    await this.notifications.create(target, NotificationType.ACCOUNT_REJECTED, 'Your registration was not approved by your school.', undefined, 'Account').catch(() => {});
     return this.usersService.findById(target.id);
   }
 

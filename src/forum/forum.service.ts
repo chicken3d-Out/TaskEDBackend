@@ -187,7 +187,7 @@ export class ForumService {
   async createReply(user: User, questionId: string, body: string, parentReplyId?: string) {
     this.assertIsAo(user);
     if (!body?.trim()) throw new BadRequestException('Reply text is required');
-    const question = await this.questionsRepo.findOne({ where: { id: questionId } });
+    const question = await this.questionsRepo.findOne({ where: { id: questionId }, relations: ['author'] });
     if (!question || question.status !== ForumQuestionStatus.APPROVED) {
       throw new NotFoundException('Question not found');
     }
@@ -195,12 +195,21 @@ export class ForumService {
     if (parentReplyId) {
       parentReply = await this.repliesRepo.findOne({
         where: { id: parentReplyId, question: { id: questionId } },
+        relations: ['author'],
       });
       if (!parentReply) throw new NotFoundException('Parent reply not found');
     }
     const saved = await this.repliesRepo.save(
       this.repliesRepo.create({ question, author: user, body: body.trim(), parentReply }),
     );
+    // Only the person being answered hears about it: the author of the reply
+    // you answered, or the asker if you answered the question itself.
+    const target = parentReply ? parentReply.author : question.author;
+    if (target && target.id !== user.id) {
+      await this.notifications
+        .create(target, NotificationType.FORUM_REVIEW, parentReply ? `${user.name} replied to your answer in the forum: "${question.title}"` : `${user.name} answered your forum question: "${question.title}"`, question.id, 'Forum reply')
+        .catch(() => {});
+    }
     this.realtimeGateway.broadcast('forum:changed', { questionId });
     return {
       id: saved.id,

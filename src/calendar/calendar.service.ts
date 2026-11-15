@@ -50,6 +50,20 @@ export class CalendarService {
     });
     const saved = await this.repo.save(event);
     this.realtimeGateway.broadcast('calendar:changed', {});
+    // Tell every approved user (not the author). Runs in the background so
+    // publishing never waits on hundreds of notifications.
+    void this.usersRepo
+      .find({ where: { status: AccountStatus.APPROVED } })
+      .then((all) =>
+        this.notificationsService.createMany(
+          all.filter((u) => u.id !== user.id && !!u.role),
+          NotificationType.CALENDAR_REMINDER,
+          `${saved.isAnnouncement ? 'New announcement' : 'New event'}: "${saved.title}" on ${saved.eventDate.toDateString()}`,
+          saved.id,
+          saved.isAnnouncement ? 'New announcement' : 'New event',
+        ),
+      )
+      .catch(() => {});
     return saved;
   }
 
