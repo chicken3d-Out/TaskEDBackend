@@ -45,9 +45,11 @@ import { SchoolDocumentType } from './school-portal/school-document-type.entity'
 import { SchoolFile } from './school-portal/school-file.entity';
 
 import { HealthController } from './health.controller';
+import { DbKeepAliveService } from './db-keepalive.service';
 
 @Module({
   controllers: [HealthController],
+  providers: [DbKeepAliveService],
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
     ScheduleModule.forRoot(),
@@ -61,7 +63,12 @@ import { HealthController } from './health.controller';
         username: config.get('DB_USERNAME', 'tasked'),
         password: config.get('DB_PASSWORD', 'change_me'),
         database: config.get('DB_DATABASE', 'tasked'),
-        ssl: config.get('DB_SSL') === 'true' ? { rejectUnauthorized: false } : false,
+        // On for Neon (any *.neon.tech host) or when DB_SSL is true / 1, in any case.
+        ssl:
+          /^(true|1)$/i.test(String(config.get('DB_SSL', '')).trim()) ||
+          /neon\.tech$/i.test(String(config.get('DB_HOST', '')).trim())
+            ? { rejectUnauthorized: false }
+            : false,
         // Serverless databases (Neon) sleep after a few idle minutes and need a
         // couple of seconds to wake. Wait for them instead of failing the request,
         // retry at start-up, and drop idle connections before the database does

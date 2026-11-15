@@ -26,7 +26,11 @@ export default new DataSource({
   password: process.env.DB_PASSWORD || 'change_me',
   database: process.env.DB_DATABASE || 'tasked',
   // Set DB_SSL=true when connecting to Render's External database URL.
-  ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: false } : false,
+  // On for Neon (any *.neon.tech host) or when DB_SSL is true / 1, in any case.
+  ssl:
+    /^(true|1)$/i.test((process.env.DB_SSL || '').trim()) || /neon\.tech$/i.test((process.env.DB_HOST || '').trim())
+      ? { rejectUnauthorized: false }
+      : false,
   entities: [
     User,
     School,
