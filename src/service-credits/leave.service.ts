@@ -177,10 +177,15 @@ export class LeaveService {
     return this.view(me, await this.load(id));
   }
 
+  // The applicant (or whoever prepared it) can delete the application at any time; it disappears for the signatories too.
   async remove(me: User, id: string) {
     const a = await this.load(id);
-    if (a.status !== 'awaiting_applicant' || (a.applicant.id !== me.id && a.filedBy?.id !== me.id)) throw new ForbiddenException('Only an application that is not signed yet can be deleted');
+    if (a.applicant.id !== me.id && a.filedBy?.id !== me.id) throw new ForbiddenException('Only the applicant or the person who prepared it can delete it');
+    const sg = a.status === 'awaiting_signatory' ? await this.signatory(a.applicant) : null;
+    if (a.deducted && a.kind) await this.credits.refund(a.applicant, a.kind, a.days, `Leave application deleted (${a.data.leaveType}, ${a.data.dates})`, me, a.id);
     await this.apps.delete({ id });
+    if (a.applicant.id !== me.id) await this.ping(a.applicant, `${me.name} deleted the leave application (Form 6) prepared for you.`);
+    if (sg && sg.ids.size) for (const u of await this.users.find({ where: { id: In([...sg.ids]) } })) await this.ping(u, `${a.applicant.name}'s leave application (Form 6) was withdrawn.`);
     return { ok: true };
   }
 
