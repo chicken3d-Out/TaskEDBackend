@@ -9,7 +9,7 @@ import {
 } from '@nestjs/common';
 import { cleanFolderLink } from '../common/links';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
+import { DataSource, In, Repository } from 'typeorm';
 import * as bcrypt from 'bcryptjs';
 import { User } from './user.entity';
 import { Role, AccountStatus } from '../common/enums/role.enum';
@@ -66,6 +66,7 @@ export class UsersService implements OnApplicationBootstrap {
   constructor(
     @InjectRepository(User) private usersRepo: Repository<User>,
     private schoolsService: SchoolsService,
+    private dataSource: DataSource,
   ) {}
 
   findByGoogleId(googleId: string): Promise<User | null> {
@@ -278,6 +279,7 @@ export class UsersService implements OnApplicationBootstrap {
     if (!Object.values(Role).includes(dto.role)) {
       throw new BadRequestException('Unknown role');
     }
+    if (dto.role === Role.PUBLISHER) throw new BadRequestException('The Publisher role no longer exists. Every Administrative Officer can publish events.');
     const target = await this.findById(targetUserId);
     if (!target) throw new NotFoundException('User not found');
 
@@ -365,6 +367,53 @@ export class UsersService implements OnApplicationBootstrap {
     if (other) {
       throw new BadRequestException(`This school already has a School account (${other.name})`);
     }
+  }
+
+  // Administrator deletes any other account, with everything that belongs to it. Rows that merely point at the user
+  // (assigned, approved by ...) are cleared; rows that cannot exist without the user are removed, following the
+  // database's own foreign keys so nothing is left dangling.
+  async deleteUser(admin: User, targetId: string): Promise<{ ok: true }> {
+    this.assertAdmin(admin);
+    if (admin.id === targetId) throw new BadRequestException('You cannot delete your own account');
+    const target = await this.usersRepo.findOne({ where: { id: targetId } });
+    if (!target) throw new NotFoundException('User not found');
+    if (target.role === Role.ADMINISTRATOR) {
+      const admins = await this.usersRepo.count({ where: { role: Role.ADMINISTRATOR } });
+      if (admins <= 1) throw new BadRequestException('There must be at least one Administrator');
+    }
+    await this.dataSource.transaction(async (m) => {
+      const fks: { table: string; col: string; ftable: string; fcol: string; nullable: string }[] = await m.query(`
+        SELECT tc.table_name AS "table", kcu.column_name AS col, ccu.table_name AS ftable, ccu.column_name AS fcol, c.is_nullable AS nullable
+        FROM information_schema.table_constraints tc
+        JOIN information_schema.key_column_usage kcu ON tc.constraint_name = kcu.constraint_name AND tc.table_schema = kcu.table_schema
+        JOIN information_schema.constraint_column_usage ccu ON ccu.constraint_name = tc.constraint_name AND ccu.table_schema = tc.table_schema
+        JOIN information_schema.columns c ON c.table_name = kcu.table_name AND c.column_name = kcu.column_name AND c.table_schema = kcu.table_schema
+        WHERE tc.constraint_type = 'FOREIGN KEY' AND tc.table_schema = current_schema()`);
+      const uuidIds = new Set<string>((await m.query(`SELECT table_name AS t FROM information_schema.columns WHERE table_schema = current_schema() AND column_name = 'id' AND data_type = 'uuid'`)).map((r: { t: string }) => r.t));
+      const q = (x: string) => `"${x.replace(/"/g, '')}"`;
+      const purge = async (table: string, col: string, ids: string[], depth: number): Promise<void> => {
+        if (!ids.length || depth > 6) return;
+        // first everything that points at the rows about to go
+        const rows: { id: string }[] = uuidIds.has(table) ? await m.query(`SELECT "id" FROM ${q(table)} WHERE ${q(col)}::text = ANY($1::text[])`, [ids]) : [];
+        const rowIds = rows.map((r) => r.id).filter(Boolean);
+        if (rowIds.length) {
+          for (const f of fks.filter((x) => x.ftable === table && x.fcol === 'id')) {
+            if (f.table === table && f.col === col) continue;
+            if (f.nullable === 'YES') await m.query(`UPDATE ${q(f.table)} SET ${q(f.col)} = NULL WHERE ${q(f.col)}::text = ANY($1::text[])`, [rowIds]);
+            else await purge(f.table, f.col, rowIds, depth + 1);
+          }
+        }
+        await m.query(`DELETE FROM ${q(table)} WHERE ${q(col)}::text = ANY($1::text[])`, [ids]);
+      };
+      for (const f of fks.filter((x) => x.ftable === 'users' && x.fcol === 'id')) {
+        if (f.table === 'users' && f.col === 'id') continue;
+        if (f.nullable === 'YES') await m.query(`UPDATE ${q(f.table)} SET ${q(f.col)} = NULL WHERE ${q(f.col)}::text = $1`, [targetId]);
+        else await purge(f.table, f.col, [targetId], 0);
+      }
+      await m.query(`DELETE FROM "users" WHERE "id" = $1`, [targetId]);
+    });
+    this.logger.log(`${admin.name} deleted user ${target.name ?? targetId}`);
+    return { ok: true };
   }
 
   async reject(admin: User, targetUserId: string): Promise<User> {

@@ -28,12 +28,12 @@ export class CalendarService {
     private realtimeGateway: NotificationsGateway,
   ) {}
 
-  // Per spec: only Administrator and Admin Office (public-post) accounts
+  // Only the Administrator and every Administrative Officer
   // can create/edit calendar events and announcements.
   private assertCanManage(user: User) {
-    if (user.role !== Role.ADMINISTRATOR && user.role !== Role.PUBLISHER) {
+    if (user.role !== Role.ADMINISTRATOR && user.role !== Role.ADMIN_OFFICER) {
       throw new ForbiddenException(
-        'Only Administrators and Publishers can manage the calendar',
+        'Only Administrators and Administrative Officers can manage the calendar',
       );
     }
   }

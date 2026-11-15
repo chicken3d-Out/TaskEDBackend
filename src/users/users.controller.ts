@@ -1,6 +1,7 @@
 import { Put,
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   Patch,
@@ -113,6 +114,13 @@ export class UsersController {
   @Post(':id/assign-role')
   assignRole(@CurrentUser() admin: User, @Param('id') id: string, @Body() dto: AssignRoleDto) {
     return this.usersService.assignRole(admin, id, dto);
+  }
+
+  @UseGuards(RolesGuard)
+  @Roles(Role.ADMINISTRATOR)
+  @Delete(':id')
+  remove(@CurrentUser() admin: User, @Param('id') id: string) {
+    return this.usersService.deleteUser(admin, id);
   }
 
   @UseGuards(RolesGuard)

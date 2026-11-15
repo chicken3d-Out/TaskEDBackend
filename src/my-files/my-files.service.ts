@@ -43,6 +43,14 @@ export class MyFilesService {
     this.assertAllowed(user);
     const label = (dto.label ?? '').trim().slice(0, 150);
     if (!label) throw new BadRequestException('A label is required');
+    // saving the same Drive file again (it was overwritten there) updates its entry instead of listing it twice
+    const link = cleanLink(dto.link);
+    const same = link ? await this.repo.findOne({ where: { owner: { id: user.id }, link } }) : null;
+    if (same) {
+      same.label = label;
+      if (dto.category !== undefined) same.category = (dto.category ?? '').trim().slice(0, 60) || null;
+      return this.view(await this.repo.save(same));
+    }
     const saved = await this.repo.save(
       this.repo.create({
         owner: { id: user.id } as User,

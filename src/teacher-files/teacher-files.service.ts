@@ -49,8 +49,11 @@ export class TeacherFilesService {
     const label = (dto.label ?? '').trim().slice(0, 150);
     if (!label) throw new BadRequestException('A label is required');
     const section = TEACHER_SECTIONS.includes(dto.section ?? '') ? dto.section! : 'Other';
+    const link = cleanLink(dto.link);
+    const same = link ? await this.repo.findOne({ where: { owner: { id: actor.id }, teacher: { id: t.id }, link } }) : null;
+    if (same) { same.label = label; same.section = section; return this.view(await this.repo.save(same)); }
     const saved = await this.repo.save(
-      this.repo.create({ owner: { id: actor.id } as User, teacher: { id: t.id } as User, section, label, link: cleanLink(dto.link) }),
+      this.repo.create({ owner: { id: actor.id } as User, teacher: { id: t.id } as User, section, label, link }),
     );
     return this.view(saved);
   }

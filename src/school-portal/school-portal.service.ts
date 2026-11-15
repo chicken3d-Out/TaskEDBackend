@@ -117,7 +117,7 @@ export class SchoolPortalService {
         teachers: atSchool.filter((u) => u.role === Role.TEACHER && u.status === AccountStatus.APPROVED).length,
         pendingTeachers: atSchool.filter((u) => !u.role && u.status === AccountStatus.PENDING && u.registrationComplete).length,
         schoolAccount: atSchool.find((u) => u.role === Role.SCHOOL && u.status !== AccountStatus.REJECTED)?.name ?? null,
-        schoolHead: atSchool.find((u) => u.role === Role.SCHOOL_HEAD && u.status === AccountStatus.APPROVED)?.name ?? s.schoolHeadName ?? null,
+        schoolHead: atSchool.find((u) => u.role === Role.SCHOOL_HEAD && u.status === AccountStatus.APPROVED)?.name ?? null,
         ao: ao?.name ?? null,
         documentsUploaded: types.size,
         documentsTotal: activeTypes,
@@ -148,13 +148,8 @@ export class SchoolPortalService {
       school,
       canEdit: this.canEdit(user, schoolId),
       personnel: {
-        // The School Head account of this school; falls back to the name typed
-        // in the school profile when nobody holds that role yet.
-        schoolHead: head
-          ? this.mini(head)
-          : school.schoolHeadName
-            ? { id: null, name: school.schoolHeadName, avatarUrl: null, designation: 'School Head', contactNumber: school.schoolHeadContact, depedEmail: null, status: null }
-            : null,
+        // Always the School Head account registered at this school (nobody types it in)
+        schoolHead: head ? this.mini(head) : null,
         schoolAccount: account ? this.mini(account) : null,
         administrativeOfficers: aos.map((u) => this.mini(u)),
         teachers: atSchool
@@ -172,8 +167,6 @@ export class SchoolPortalService {
     if (dto.address !== undefined) school.address = clean(dto.address);
     if (dto.contactNumber !== undefined) school.contactNumber = clean(dto.contactNumber);
     if (dto.email !== undefined) school.email = clean(dto.email);
-    if (dto.schoolHeadName !== undefined) school.schoolHeadName = clean(dto.schoolHeadName);
-    if (dto.schoolHeadContact !== undefined) school.schoolHeadContact = clean(dto.schoolHeadContact);
     if (dto.name !== undefined && user.role === Role.ADMINISTRATOR && clean(dto.name)) {
       school.name = clean(dto.name)!;
     }
