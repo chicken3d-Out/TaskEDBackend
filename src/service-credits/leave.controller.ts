@@ -21,6 +21,4 @@ export class LeaveController {
   @Put(':id') update(@CurrentUser() u: User, @Param('id') id: string, @Body() b: any) { return this.service.update(u, id, b); }
   @Delete(':id') remove(@CurrentUser() u: User, @Param('id') id: string) { return this.service.remove(u, id); }
   @Post(':id/sign') sign(@CurrentUser() u: User, @Param('id') id: string, @Body() b: any) { return this.service.sign(u, id, b); }
-  @Post(':id/disapprove') disapprove(@CurrentUser() u: User, @Param('id') id: string, @Body() b: { reason?: string }) { return this.service.disapprove(u, id, b?.reason ?? ''); }
-  @Post(':id/send') send(@CurrentUser() u: User, @Param('id') id: string) { return this.service.send(u, id); }
 }

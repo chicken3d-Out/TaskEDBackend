@@ -15,6 +15,8 @@ export const LEAVE_TYPES = [
   '10-Day VAWC Leave', 'Rehabilitation Privilege', 'Special Leave Benefits for Women', 'Special Emergency (Calamity) Leave', 'Adoption Leave', 'Others',
 ];
 const MAX_SIG = 300_000;
+// printed on the form until the Administrator sets other names
+const DEFAULTS = { hrmo: 'ERNESTO A. DIMAKILING', hrmoTitle: 'Administrative Officer IV / HRMO II', asds: 'TEODORICO C. PELIÑO, JR., EdD', asdsTitle: 'OIC - Assistant Schools Division Superintendent' };
 const LEAVE_ROLES = [Role.TEACHER, Role.NON_TEACHING, Role.DS_SECRETARY, Role.SCHOOL_HEAD, Role.ADMIN_OFFICER, Role.PUBLISHER, Role.DISTRICT_SUPERVISOR];
 const round2 = (n: number) => Math.round(n * 100) / 100;
 const str = (v: unknown, n: number) => String(v ?? '').trim().slice(0, n);
@@ -67,27 +69,40 @@ export class LeaveService {
   }
 
   // ---------- view ----------
+  // what 7.A will show: the credits as they stand, less this leave (kept for real when the signatory approves)
+  private async previewCredit(a: LeaveApplication): Promise<LeaveApplication['credit']> {
+    if (a.credit) return a.credit;
+    if (!a.kind || !['awaiting_applicant', 'awaiting_signatory'].includes(a.status)) return null;
+    const colOf = a.kind === 'sl' ? 'sl' : a.kind === 'vl' || a.kind === 'service_credit' ? 'vl' : null;
+    if (!colOf) return null;
+    const mineB = await this.credits.balanceOf(a.applicant, a.kind);
+    const otherB = a.kind === 'vl' ? await this.credits.balanceOf(a.applicant, 'sl') : a.kind === 'sl' ? await this.credits.balanceOf(a.applicant, 'vl') : null;
+    if (!mineB) return null;
+    const mine = { earned: mineB.balance, less: a.days, balance: round2(mineB.balance - a.days) };
+    const theirs = otherB ? { earned: otherB.balance, less: 0, balance: otherB.balance } : null;
+    return { asOf: new Date().toISOString().slice(0, 10), label: KIND_LABEL[a.kind], col: colOf, vl: colOf === 'vl' ? mine : theirs, sl: colOf === 'sl' ? mine : theirs };
+  }
+
   private async view(me: User, a: LeaveApplication) {
     const sg = await this.signatory(a.applicant);
-    let myTurn: 'applicant' | 'ao' | 'send' | 'signatory' | null = null;
+    let myTurn: 'applicant' | 'signatory' | null = null;
     if (a.status === 'awaiting_applicant' && a.applicant.id === me.id) myTurn = 'applicant';
-    else if (a.status === 'awaiting_ao' && this.aoOf(me, a.applicant)) myTurn = 'ao';
-    else if (a.status === 'ao_approved' && this.aoOf(me, a.applicant)) myTurn = 'send';
     else if (a.status === 'awaiting_signatory' && sg.ids.has(me.id)) myTurn = 'signatory';
-    let signAs: string | null = null;
-    if (myTurn === 'applicant' || myTurn === 'ao' || myTurn === 'signatory') signAs = await this.mySignature(me, myTurn === 'signatory' && sg.ds);
+    const signAs = myTurn ? await this.mySignature(me, myTurn === 'signatory' && sg.ds) : null;
     const hrmo = await this.named('hrmo'), asds = await this.named('asds');
     const titles = await this.getSettings();
     const kinds = kindsFor(a.applicant.role) ?? [];
     return {
-      id: a.id, status: a.status, data: a.data, kind: a.kind, kindLabel: a.kind ? KIND_LABEL[a.kind] : null, days: a.days, credit: a.credit, deducted: a.deducted, recommendation: a.recommendation, note: a.note,
+      id: a.id, status: a.status, data: a.data, kind: a.kind, kindLabel: a.kind ? KIND_LABEL[a.kind] : null, days: a.days, credit: await this.previewCredit(a), deducted: a.deducted, recommendation: a.recommendation, note: a.note,
       applicant: { id: a.applicant.id, name: a.applicant.name, role: a.applicant.role, school: a.applicant.school?.name ?? '' },
       filedBy: a.filedBy ? { id: a.filedBy.id, name: a.filedBy.name } : null,
-      sigs: a.sigs, myTurn, signAs, kinds: kinds.map((k) => ({ kind: k, label: KIND_LABEL[k] })),
-      printed: { hrmo: hrmo.name, hrmoTitle: titles.hrmoTitle || 'HRMO II', asds: asds.name, asdsTitle: titles.asdsTitle || 'Assistant Schools Division Superintendent', signatory: sg.name, signatoryTitle: sg.title, signatoryNote: sg.note ?? null },
+      sigs: a.sigs, myTurn, signAs, kinds: kinds.map((k) => ({ kind: k, label: KIND_LABEL[k] })), events: a.events ?? [],
+      printed: { hrmo: hrmo.name || DEFAULTS.hrmo, hrmoTitle: titles.hrmoTitle || DEFAULTS.hrmoTitle, asds: asds.name || DEFAULTS.asds, asdsTitle: titles.asdsTitle || DEFAULTS.asdsTitle, signatory: sg.name, signatoryTitle: sg.title, signatoryNote: sg.note ?? null },
       createdAt: a.createdAt, updatedAt: a.updatedAt,
     };
   }
+
+  private event(a: LeaveApplication, by: User, text: string) { a.events = [...(a.events ?? []), { at: new Date().toISOString(), by: by.name ?? '', text }]; }
 
   private async load(id: string) {
     const a = await this.apps.findOne({ where: { id } });
@@ -145,7 +160,8 @@ export class LeaveService {
     if (!a.role || !LEAVE_ROLES.includes(a.role)) throw new ForbiddenException('Leave applications are not available for this account type');
     if (a.id !== me.id && !this.aoOf(me, a)) throw new ForbiddenException('Only the school’s Administrative Officer can file for someone else');
     const { data, kind } = this.clean(a, dto.data, dto.kind);
-    const rec = await this.apps.save(this.apps.create({ applicant: { id: a.id } as User, filedBy: { id: me.id } as User, status: 'awaiting_applicant', data, kind, days: data.days, sigs: {} }));
+    data.filingDate = new Date(Date.now() + 8 * 3600_000).toISOString().slice(0, 10); // today, Philippine time
+    const rec = await this.apps.save(this.apps.create({ applicant: { id: a.id } as User, filedBy: { id: me.id } as User, status: 'awaiting_applicant', data, kind, days: data.days, sigs: {}, events: [{ at: new Date().toISOString(), by: me.name ?? '', text: a.id === me.id ? 'Prepared the application.' : `Prepared the application for ${a.name}.` }] }));
     if (a.id !== me.id) await this.ping(a, `${me.name} prepared a leave application (Form 6) for you to sign.`);
     return this.view(me, await this.load(rec.id));
   }
@@ -154,7 +170,9 @@ export class LeaveService {
     const a = await this.load(id);
     if (a.status !== 'awaiting_applicant' || (a.applicant.id !== me.id && a.filedBy?.id !== me.id)) throw new ForbiddenException('This application can no longer be edited');
     const { data, kind } = this.clean(a.applicant, dto.data, dto.kind);
+    data.filingDate = a.data.filingDate;
     Object.assign(a, { data, kind, days: data.days });
+    this.event(a, me, 'Edited the application.');
     await this.apps.save(a);
     return this.view(me, await this.load(id));
   }
@@ -167,53 +185,42 @@ export class LeaveService {
   }
 
   // ---------- signing ----------
-  private sigFrom(img: string | null, x: number, y: number): LeaveSig {
+  private sigFrom(img: string | null, x: number, y: number, w?: number): LeaveSig {
     if (!(x >= 0 && x <= 1 && y >= 0 && y <= 1)) throw new BadRequestException('Tap on the form where the signature goes');
     if (!img) throw new BadRequestException('Add your signature in My profile first');
     if (!/^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(img) || img.length > MAX_SIG) throw new BadRequestException('Your signature image is not valid');
-    return { img, x, y, at: new Date().toISOString() };
+    const width = Number(w);
+    return { img, x, y, w: width >= 0.03 && width <= 0.4 ? width : undefined, at: new Date().toISOString() };
   }
 
   private async ping(u: User, msg: string) { await this.notifications.create(u, NotificationType.SERVICE_CREDIT, msg).catch(() => undefined); }
 
+  // The credit is taken off only when the corresponding signatory approves.
   private async deduct(a: LeaveApplication, actor: User) {
     if (!a.kind) return;
     const cur = await this.credits.balanceOf(a.applicant, a.kind);
-    if (!cur || !cur.usable) throw new BadRequestException(`${KIND_LABEL[a.kind]} has no starting count yet. Set it in Service Credits first.`);
+    if (!cur || !cur.usable) throw new BadRequestException(`${KIND_LABEL[a.kind]} has no starting count yet. The Administrative Officer must set it in Service Credits first.`);
     if (cur.balance < a.days) throw new BadRequestException(`${a.applicant.name} has only ${cur.balance} day(s) of ${KIND_LABEL[a.kind]}, but ${a.days} are applied for.`);
-    // 7.A shows Vacation and Sick Leave; a teacher's Service Credit is shown under Vacation Leave
-    const colOf = a.kind === 'sl' ? 'sl' : a.kind === 'vl' || a.kind === 'service_credit' ? 'vl' : null;
-    const other = colOf === 'vl' && a.kind === 'vl' ? await this.credits.balanceOf(a.applicant, 'sl') : colOf === 'sl' ? await this.credits.balanceOf(a.applicant, 'vl') : null;
+    const snap = (await this.previewCredit({ ...a, credit: null, status: 'awaiting_signatory' } as LeaveApplication))!;
     await this.credits.spend(a.applicant, a.kind, a.days, `${a.data.leaveType}, ${a.data.dates}`, actor, a.id);
     a.deducted = true;
-    const mine = { earned: cur.balance, less: a.days, balance: round2(cur.balance - a.days) };
-    const theirs = other ? { earned: other.balance, less: 0, balance: other.balance } : null;
-    a.credit = { asOf: new Date().toISOString().slice(0, 10), label: KIND_LABEL[a.kind], col: colOf, vl: colOf === 'vl' ? mine : theirs, sl: colOf === 'sl' ? mine : theirs };
+    a.credit = snap;
   }
 
-  async sign(me: User, id: string, dto: { x: number; y: number; kind?: string | null; decision?: string; reason?: string }) {
+  async sign(me: User, id: string, dto: { x: number; y: number; w?: number; decision?: string; reason?: string }) {
     const a = await this.load(id);
     const v = await this.view(me, a);
-    if (!v.myTurn || v.myTurn === 'send') throw new ForbiddenException('It is not your turn to sign this');
-    const sig = this.sigFrom(v.signAs, Number(dto.x), Number(dto.y));
+    if (!v.myTurn) throw new ForbiddenException('It is not your turn to sign this');
+    const sig = this.sigFrom(v.signAs, Number(dto.x), Number(dto.y), dto.w);
 
     if (v.myTurn === 'applicant') {
       a.sigs = { ...a.sigs, applicant: sig };
-      if (a.applicant.role === Role.DISTRICT_SUPERVISOR) a.status = 'approved';
-      else if (this.needsAo(a.applicant)) a.status = 'awaiting_ao';
-      else a.status = 'awaiting_signatory';
+      a.status = a.applicant.role === Role.DISTRICT_SUPERVISOR ? 'approved' : 'awaiting_signatory';
+      this.event(a, me, `${me.name} signed the application.`);
+      if (a.status === 'awaiting_signatory') this.event(a, me, `Sent to the ${v.printed.signatoryTitle}${v.printed.signatory ? ' (' + v.printed.signatory + ')' : ''} for signature.`);
       await this.apps.save(a);
-      if (a.status === 'awaiting_ao') for (const ao of await this.aosFor(a.applicant)) await this.ping(ao, `${a.applicant.name} signed a leave application (Form 6) for your approval.`);
       if (a.status === 'awaiting_signatory') await this.pingSignatories(a);
-      return this.view(me, await this.load(id));
-    }
-
-    if (v.myTurn === 'ao') {
-      if (dto.kind !== undefined) a.kind = dto.kind ? (this.clean(a.applicant, { ...a.data }, dto.kind).kind) : null;
-      await this.deduct(a, me);
-      a.sigs = { ...a.sigs, ao: sig }; a.status = 'ao_approved';
-      await this.apps.save(a);
-      await this.ping(a.applicant, `Your leave application (Form 6) was approved by ${me.name}${a.deducted ? ` and ${a.days} day(s) were deducted` : ''}.`);
+      if (a.filedBy && a.filedBy.id !== me.id) await this.ping(a.filedBy, `${a.applicant.name} signed the leave application (Form 6) you prepared.`);
       return this.view(me, await this.load(id));
     }
 
@@ -221,47 +228,15 @@ export class LeaveService {
     const decision = dto.decision === 'disapproval' ? 'disapproval' : 'approval';
     const reason = str(dto.reason, 300);
     if (decision === 'disapproval' && !reason) throw new BadRequestException('Give the reason for disapproval');
-    if (decision === 'approval' && !a.deducted) await this.deduct(a, me); // an AO's own leave is deducted when the School Head approves
-    if (decision === 'disapproval' && a.deducted && a.kind) {
-      await this.credits.refund(a.applicant, a.kind, a.days, `Leave disapproved: ${reason}`, me, a.id);
-      a.deducted = false;
-    }
+    if (decision === 'approval') await this.deduct(a, me);
     a.sigs = { ...a.sigs, signatory: sig }; a.recommendation = { decision, reason: decision === 'disapproval' ? reason : '' };
     a.status = decision === 'approval' ? 'approved' : 'disapproved'; a.note = decision === 'disapproval' ? reason : null;
+    this.event(a, me, decision === 'approval' ? `${me.name} approved it${a.deducted ? `; ${a.days} day(s) of ${a.credit?.label ?? KIND_LABEL[a.kind!]} deducted` : ''}.` : `${me.name} disapproved it: ${reason}`);
     await this.apps.save(a);
-    await this.ping(a.applicant, `Your leave application (Form 6) was ${decision === 'approval' ? 'recommended for approval' : 'disapproved'} by ${me.name}.`);
+    const msg = `The leave application (Form 6) of ${a.applicant.name} was ${decision === 'approval' ? 'approved' : 'disapproved'} by ${me.name}.`;
+    await this.ping(a.applicant, msg);
+    if (a.filedBy && a.filedBy.id !== a.applicant.id) await this.ping(a.filedBy, msg);
     return this.view(me, await this.load(id));
-  }
-
-  // the AO turns a leave down before it is deducted
-  async disapprove(me: User, id: string, reason: string) {
-    const a = await this.load(id);
-    if (a.status !== 'awaiting_ao' || !this.aoOf(me, a.applicant)) throw new ForbiddenException('It is not yours to decide');
-    const r = str(reason, 300);
-    if (!r) throw new BadRequestException('Give the reason');
-    a.status = 'disapproved'; a.note = r; a.recommendation = { decision: 'disapproval', reason: r };
-    await this.apps.save(a);
-    await this.ping(a.applicant, `Your leave application (Form 6) was disapproved by ${me.name}: ${r}`);
-    return this.view(me, await this.load(id));
-  }
-
-  // after the AO's approval: send it on to the School Head (or the District Supervisor for a School Head)
-  async send(me: User, id: string) {
-    const a = await this.load(id);
-    if (a.status !== 'ao_approved' || !this.aoOf(me, a.applicant)) throw new ForbiddenException('Nothing to send');
-    const sg = await this.signatory(a.applicant);
-    if (!sg.ids.size) throw new BadRequestException(sg.note ?? 'No signatory account yet');
-    a.status = 'awaiting_signatory';
-    await this.apps.save(a);
-    await this.pingSignatories(a);
-    return this.view(me, await this.load(id));
-  }
-
-  private async aosFor(a: User) {
-    const sid = this.schoolId(a);
-    if (!sid) return [];
-    const aos = await this.users.find({ where: { role: In([Role.ADMIN_OFFICER, Role.PUBLISHER]), status: AccountStatus.APPROVED } });
-    return aos.filter((u) => this.managedIds(u).has(sid));
   }
 
   private async pingSignatories(a: LeaveApplication) {

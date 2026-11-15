@@ -36,7 +36,7 @@ export class TravelAuthorityController {
   @Get(':id') get(@CurrentUser() u: User, @Param('id') id: string) { return this.service.get(u, id); }
   @Patch(':id') update(@CurrentUser() u: User, @Param('id') id: string, @Body() b: any) { return this.service.update(u, id, b ?? {}); }
   @Post(':id/send') send(@CurrentUser() u: User, @Param('id') id: string) { return this.service.sendToRequester(u, id); }
-  @Post(':id/sign') sign(@CurrentUser() u: User, @Param('id') id: string, @Body() b: { x?: number; y?: number }) { return this.service.sign(u, id, b ?? {}); }
+  @Post(':id/sign') sign(@CurrentUser() u: User, @Param('id') id: string, @Body() b: { x?: number; y?: number; scale?: number }) { return this.service.sign(u, id, b ?? {}); }
   @Post(':id/attachments') addAttachment(@CurrentUser() u: User, @Param('id') id: string, @Body() b: any) { return this.service.addAttachment(u, id, b ?? {}); }
   @Get(':id/attachments/:aid') getAttachment(@CurrentUser() u: User, @Param('id') id: string, @Param('aid') aid: string) { return this.service.getAttachment(u, id, aid); }
   @Delete(':id/attachments/:aid') removeAttachment(@CurrentUser() u: User, @Param('id') id: string, @Param('aid') aid: string) { return this.service.removeAttachment(u, id, aid); }

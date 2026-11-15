@@ -7,6 +7,7 @@ export interface TaSignature {
   img: string; // PNG data URL, a snapshot of the signer's signature at signing time
   x: number; // centre of the signature, as a fraction of the page width (0-1)
   y: number; // centre of the signature, as a fraction of the page height (0-1)
+  scale?: number; // how much the signer enlarged or shrank it (1 = the default size on the form)
   at: string; // ISO time it was signed
 }
 

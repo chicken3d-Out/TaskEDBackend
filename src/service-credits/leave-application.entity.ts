@@ -2,9 +2,10 @@ import { Column, CreateDateColumn, Entity, JoinColumn, ManyToOne, PrimaryGenerat
 import { User } from '../users/user.entity';
 import { CreditKind } from './service-credit.entities';
 
-export type LeaveStatus = 'awaiting_applicant' | 'awaiting_ao' | 'ao_approved' | 'awaiting_signatory' | 'approved' | 'disapproved';
+export type LeaveStatus = 'awaiting_applicant' | 'awaiting_signatory' | 'approved' | 'disapproved';
 
-export interface LeaveSig { img: string; x: number; y: number; at: string }
+// w: the signature's width as a fraction of the page width (the signer can resize it)
+export interface LeaveSig { img: string; x: number; y: number; w?: number; at: string }
 export interface LeaveData {
   office: string; lastName: string; firstName: string; middleName: string; filingDate: string; position: string; salary: string;
   leaveType: string; otherLeave: string;
@@ -40,6 +41,8 @@ export class LeaveApplication {
   // 7.A: the credit at the time it was deducted
   @Column({ type: 'jsonb', nullable: true }) credit: LeaveCreditSnapshot | null;
   @Column({ default: false }) deducted: boolean;
+  // the story of the application: prepared, signed, sent, approved ...
+  @Column({ type: 'jsonb', default: () => "'[]'" }) events: { at: string; by: string; text: string }[];
   @Column({ type: 'jsonb', nullable: true }) recommendation: { decision: 'approval' | 'disapproval'; reason: string } | null;
   @Column({ type: 'varchar', length: 300, nullable: true }) note: string | null;
   @CreateDateColumn({ name: 'created_at' }) createdAt: Date;

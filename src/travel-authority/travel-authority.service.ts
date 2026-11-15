@@ -270,7 +270,7 @@ export class TravelAuthorityService {
     return this.view(await this.load(id), me, true);
   }
 
-  async sign(me: User, id: string, dto: { x?: number; y?: number }) {
+  async sign(me: User, id: string, dto: { x?: number; y?: number; scale?: number }) {
     this.canUse(me);
     const t = await this.load(id);
     const turn = this.myTurn(t, me);
@@ -288,7 +288,8 @@ export class TravelAuthorityService {
       if (!img) throw new BadRequestException('The District Supervisor’s signature has not been uploaded yet. Ask the Administrator (Users › Travel Authority signatories).');
     }
     if (!img) throw new BadRequestException('Add your signature in My profile first');
-    const sig: TaSignature = { img, x, y, at: new Date().toISOString() };
+    const sc = Number(dto.scale);
+    const sig: TaSignature = { img, x, y, scale: sc >= 0.3 && sc <= 3 ? Math.round(sc * 100) / 100 : undefined, at: new Date().toISOString() };
 
     if (turn === 'requester') {
       if (!t.data.name || !t.data.purpose || !t.data.destination) throw new BadRequestException('Fill in the name, purpose and destination first');
