@@ -11,8 +11,21 @@ async function bootstrap() {
   app.useBodyParser('urlencoded', { limit: '12mb', extended: true });
   const config = app.get(ConfigService);
 
+  // Allowed browser origins: the web app (FRONTEND_URL; several can be given,
+  // separated by commas) plus the origins the Capacitor Android/iOS app sends
+  // requests from. Requests with no Origin (server-to-server, curl) pass too.
+  const webOrigins = config
+    .get<string>('FRONTEND_URL', 'http://localhost:4200')
+    .split(',')
+    .map((s) => s.trim().replace(/\/+$/, ''))
+    .filter(Boolean);
+  const appOrigins = ['https://localhost', 'http://localhost', 'capacitor://localhost', 'ionic://localhost'];
   app.enableCors({
-    origin: config.get<string>('FRONTEND_URL', 'http://localhost:4200'),
+    origin: (origin, cb) => {
+      if (!origin) return cb(null, true);
+      const o = origin.replace(/\/+$/, '');
+      cb(null, webOrigins.includes(o) || appOrigins.includes(o));
+    },
     credentials: true,
   });
 
